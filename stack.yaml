@@ -1,0 +1,9 @@
+resolver: lts-7.14
+
+packages:
+  - compare-revisions-api
+  - compare-revisions-server
+
+extra-deps:
+  - logging-effect-1.1.0
+  - servant-quickcheck-0.0.2.1
