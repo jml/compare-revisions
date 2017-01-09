@@ -29,10 +29,13 @@ library:
     - logging-effect
     - mtl
     - optparse-applicative
+    - process
     - prometheus-client
     - prometheus-metrics-ghc
     - servant-server
+    - text
     - time
+    - unordered-containers
     - wai
     - wai-extra
     - wai-middleware-prometheus

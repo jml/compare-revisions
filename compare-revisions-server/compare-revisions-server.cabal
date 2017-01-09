@@ -35,16 +35,20 @@ library
     , logging-effect
     , mtl
     , optparse-applicative
+    , process
     , prometheus-client
     , prometheus-metrics-ghc
     , servant-server
+    , text
     , time
+    , unordered-containers
     , wai
     , wai-extra
     , wai-middleware-prometheus
     , warp
     , wl-pprint-text
   exposed-modules:
+      CompareRevisions.Kube
       CompareRevisions.Server
       CompareRevisions.Server.Handlers
       CompareRevisions.Server.Instrument
