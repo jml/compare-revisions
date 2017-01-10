@@ -23,7 +23,10 @@ library:
     - compare-revisions-api
     - aeson
     - bytestring
+    - containers
+    - directory
     - exceptions
+    - filepath
     - http-media
     - http-types
     - logging-effect
@@ -35,7 +38,9 @@ library:
     - servant-server
     - text
     - time
+    - unix
     - unordered-containers
+    - yaml
     - wai
     - wai-extra
     - wai-middleware-prometheus
@@ -48,6 +53,14 @@ executables:
     source-dirs: cmd
     dependencies:
       - compare-revisions-server
+
+  compare-images:
+    main: CompareImages.hs
+    source-dirs: cmd
+    dependencies:
+      - compare-revisions-server
+      - containers
+      - optparse-applicative
 
 tests:
   compare-revisions-server-tests:
