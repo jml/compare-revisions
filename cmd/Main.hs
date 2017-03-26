@@ -5,7 +5,7 @@ module Main
 
 import Protolude
 
-import CompareRevisions.Server (startApp)
+import CompareRevisions (startApp)
 
 main :: IO ()
 main = startApp

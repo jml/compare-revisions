@@ -2,15 +2,14 @@
 {-# LANGUAGE DataKinds #-}
 
 -- | Serve the API as an HTTP server.
-module CompareRevisions.Server
+module CompareRevisions
   ( server
   , startApp
   ) where
 
 import Protolude
 
-import Control.Monad.Log (Severity(..))
-import qualified Data.List as List
+import Control.Logging (LogLevel(..), log', warn', setLogLevel, setLogTimeFormat, withStdoutLogging)
 import GHC.Stats (getGCStatsEnabled)
 import Network.Wai.Handler.Warp
        (Port, Settings, defaultSettings, runSettings, setBeforeMainLoop,
@@ -22,10 +21,9 @@ import Options.Applicative
 import qualified Prometheus as Prom
 import qualified Prometheus.Metric.GHC as Prom
 import Servant (serve)
-import Text.PrettyPrint.Leijen.Text (int, text)
 
-import CompareRevisions.API (api)
-import CompareRevisions.Server.Handlers (server)
+import CompareRevisions.API (api, server)
+
 import CompareRevisions.Server.Instrument
        (defaultPrometheusSettings, prometheus, requestDuration)
 import qualified CompareRevisions.Server.Logging as Log
@@ -34,7 +32,7 @@ import qualified CompareRevisions.Server.Logging as Log
 data Config = Config
   { port :: Port
   , accessLogs :: AccessLogs
-  , logLevel :: Severity
+  , logLevel :: LogLevel
   , enableGhcMetrics :: Bool
   } deriving (Show)
 
@@ -47,7 +45,11 @@ data AccessLogs
 
 -- | Run the service.
 startApp :: IO ()
-startApp = runApp =<< execParser options
+startApp = do
+  opts <- execParser options
+  setLogTimeFormat "%Y-%m-%d %H:%M:%S.%q"
+  setLogLevel (logLevel opts)
+  withStdoutLogging $ runApp opts
 
 options :: ParserInfo Config
 options = info (helper <*> parser) description
@@ -60,24 +62,23 @@ options = info (helper <*> parser) description
         (fold
            [long "access-logs", help "How to log HTTP access", value Disabled]) <*>
       option
-        (eitherReader
-           (maybe (throwError (toS invalidLogLevel)) pure . Log.fromKeyword . toS))
+        (eitherReader (pure . Log.fromKeyword . toS))
         (fold
            [ long "log-level"
            , help "Minimum severity for log messages"
-           , value Informational
+           , value LevelInfo
            ]) <*>
       switch
         (fold
            [ long "ghc-metrics"
            , help "Export GHC metrics. Requires running with +RTS."
            ])
-    invalidLogLevel = "Log level must be one of: " <> allLogLevels
-    allLogLevels = fold . List.intersperse "," . map Log.toKeyword $ enumFrom minBound
+
     parseAccessLogs "none" = pure Disabled
     parseAccessLogs "basic" = pure Enabled
     parseAccessLogs "dev" = pure DevMode
     parseAccessLogs _ = throwError "One of 'none', 'basic', or 'dev'"
+
     description =
       fold
         [ fullDesc
@@ -91,11 +92,7 @@ runApp config@Config {..} = do
   when enableGhcMetrics $
     do statsEnabled <- getGCStatsEnabled
        unless statsEnabled $
-         Log.withLogging logLevel $
-         Log.log
-           Warning
-           (text
-              "Exporting GHC metrics but GC stats not enabled. Re-run with +RTS -T.")
+         warn' "Exporting GHC metrics but GC stats not enabled. Re-run with +RTS -T."
        void $ Prom.register Prom.ghcMetrics
   runSettings settings (middleware requests)
   where
@@ -107,15 +104,13 @@ runApp config@Config {..} = do
         Disabled -> identity
         Enabled -> RL.logStdout
         DevMode -> RL.logStdoutDev
-    app = serve api (server logLevel)
+    app = serve api server
 
 -- | Generate warp settings from config
 --
 -- Serve from a port and print out where we're serving from.
 warpSettings :: Config -> Settings
 warpSettings Config {..} =
-  setBeforeMainLoop
-    (Log.withLogging logLevel printPort)
-    (setPort port defaultSettings)
+  setBeforeMainLoop printPort (setPort port defaultSettings)
   where
-    printPort = Log.log Informational (text "Listening on :" `mappend` int port)
+    printPort = log' ("Listening on :" <> show port)
