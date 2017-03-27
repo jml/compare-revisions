@@ -2,18 +2,49 @@
 
 [![Circle CI](https://circleci.com/gh/jml/compare-revisions/tree/master.svg?style=shield)](https://circleci.com/gh/jml/compare-revisions/tree/master)
 
-Show how sets of images differ, by revision
+Do you have a "staging" Kubernetes cluster and a "production" Kubernetes
+cluster and want to see what's deployed to staging, but not to production?
 
-Contains:
+`compare-revisions` is a simple web service that you can deploy to your
+staging cluster that will tell you what's on staging but not on prod.
 
-* compare-revisions-api -- API definition for compare-revisions
-* compare-revisions-server -- Server implementation of the compare-revisions API
+It does this by assuming that there exists a simple mapping from image *names*
+to Git repositories, and from image *tags* to Git revisions.
 
-## What it is
+## Example
 
-## Why you might want it
+This configuration will pull from a configuration repository on Github
+(`my-org/service-config`) every minute and compare the images found under the
+`k8s/dev` path to the corresponding images in the `k8s/prod` path.
 
-## How to use it
+When it finds `weaveworks/cortex` images, it will apply a regular expression
+to extract the revision from the image tag, assuming that the metric tag is of
+the form `master-1ab2c3d`.
+
+```yaml
+config-repo:
+  url: git@github.com:my-org/service-config.git
+  poll-interval: 1m
+  source-env:
+    name: dev
+    path: k8s/dev
+  target-env:
+    name: prod
+    path: k8s/prod
+
+images:
+  weaveworks/cortex:
+    git-url: git@github.com:weaveworks/cortex.git
+    image-to-revision-policy: weaveworks
+
+revision-policies:
+  weaveworks:
+    type: regex
+    match: ^master-([0-9a-f]+)$
+    output: \1
+```
+
+## How to run it
 
 ### Natively
 
