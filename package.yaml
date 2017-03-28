@@ -21,6 +21,7 @@ library:
   source-dirs: src
   dependencies:
     - aeson
+    - attoparsec
     - bytestring
     - containers
     - directory
@@ -35,6 +36,7 @@ library:
     - process
     - prometheus-client
     - prometheus-metrics-ghc
+    - QuickCheck
     - servant
     - servant-server
     - text
@@ -69,7 +71,7 @@ tests:
     source-dirs: tests
     dependencies:
       - compare-revisions
-      - logging-effect
+      - hspec
       - QuickCheck
       - servant-quickcheck
       - tasty
