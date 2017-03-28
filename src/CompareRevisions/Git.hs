@@ -4,9 +4,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 module CompareRevisions.Git
   ( Url(..)
-  , Branch(..)
-  , RevSpec(..)
   , GitError(..)
+  , ensureCheckout
   , syncRepo
   ) where
 
@@ -14,7 +13,6 @@ import Protolude
 
 import qualified Data.Text as Text
 import Data.Yaml (FromJSON)
-import Numeric.Natural (Natural)
 import System.Directory (removeDirectoryRecursive)
 import System.FilePath ((</>), makeRelative, takeDirectory)
 import System.IO.Error (isDoesNotExistError)
@@ -38,12 +36,11 @@ newtype Url = Url Text deriving (Eq, Ord, Show, Generic, FromJSON)
 -- | A Git branch.
 newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON)
 
--- | A revision. Can be specified in innumerable ways, e.g. 'HEAD', 'ab2c3a',
--- 'HEAD^', etc.
-newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show, Generic, FromJSON)
-
 -- | A SHA-1 hash for a Git revision.
 newtype Hash = Hash Text deriving (Eq, Ord, Show, Generic, FromJSON)
+
+-- | The human specification for a Git revision. e.g. 'HEAD', 'origin/master'.
+newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show)
 
 -- XXX: Not sure this is a good idea. Maybe use exceptions all the way
 -- through?
@@ -58,81 +55,87 @@ data GitError
 -- If the repository does not exist locally, it will be cloned from the URL.
 -- If it does, it will be updated.
 syncRepo
-  :: HasCallStack
+  :: (MonadIO m, MonadError GitError m, HasCallStack)
   => Url -- ^ URL of Git repository to synchronize
-  -> Branch -- ^ Branch of the Git repository to check out
-  -> RevSpec -- ^ Revision spec (e.g. HEAD) to update to
-  -> Maybe Natural -- ^ The depth of the clone. If 'Nothing', do a full clone.
   -> FilePath -- ^ Where to store the bare Git repository
-  -> FilePath -- ^ Where to create the work tree
-  -> ExceptT GitError IO ()
-syncRepo url branch rev depth repoPath workingTreePath = do
-  changed <- ensureRepo
-  for_ changed $ \hash@(Hash hashText) -> do
-    let canonicalTree = repoPath </> ("rev-" <> toS hashText)
-    addWorkTree repoPath canonicalTree branch
-    resetWorkTree canonicalTree hash
-    oldTree <- liftIO $ swapSymlink workingTreePath canonicalTree
-    for_ oldTree $ \path -> do
-      liftIO $ removeDirectoryRecursive path
-      runGitInRepo repoPath ["worktree", "prune"]
-
-  where
-    ensureRepo = do
-      repoExists <- liftIO $ fileExist repoPath
-      if repoExists
-        then do
-          remote <- needsUpdate repoPath branch rev
-          when (isJust remote) (void $ fetchRepo repoPath)
-          pure remote
-        else do
-          repoPath' <- cloneRepo url branch depth repoPath
-          Just <$> hashForRev repoPath' rev
-
+  -> m ()
+syncRepo url repoPath = do
+  repoExists <- liftIO $ fileExist repoPath
+  if repoExists
+    then fetchRepo repoPath
+    else cloneRepo url repoPath
 
 -- | Clone a Git repository.
-cloneRepo :: (HasCallStack, MonadError GitError m, MonadIO m)
-          => Url -> Branch -> Maybe Natural -> FilePath
-          -> m FilePath
-cloneRepo (Url url) (Branch branch) depth gitRoot = do
-  let args = ["clone", "--mirror", "-b", branch]
-             <> case depth of
-                  Nothing -> []
-                  Just d -> ["--depth", show d]
-             <> [url, toS gitRoot]
-  -- TODO: logging
-  void $ runGit args
-  pure gitRoot
-
+cloneRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => Url -> FilePath -> m ()
+cloneRepo (Url url) gitRoot = void $ runGit (["clone", "--mirror"] <> [url, toS gitRoot])
 
 -- | Fetch the latest changes to a Git repository.
 fetchRepo :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> m ()
 fetchRepo repoPath = void $ runGitInRepo repoPath ["fetch", "--all", "--prune"]
 
--- | Do we need to update repo?
-needsUpdate :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> Branch -> RevSpec -> m (Maybe Hash)
-needsUpdate repoPath branch rev = do
-  localHash <- hashForRev repoPath rev
-  remote <- remoteHashForRev repoPath branch rev
-  pure $ if localHash == remote
-         then Nothing
-         else Just remote
 
--- | Get the SHA1 of a revision.
-hashForRev :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> m Hash
-hashForRev repoPath (RevSpec rev) = Hash . Text.strip . fst <$> runGitInRepo repoPath ["rev-list", "-n1", rev]
+-- | Ensure a checkout exists at the given path.
+--
+-- Assumes that:
+--   * we have write access to the repo (we create checkouts under there)
+--   * we are responsible for managing the checkout path
+--
+-- Checkout path is a symlink to the canonical location of the working tree,
+-- which is updated to point at a new directory if they are out of date.
+ensureCheckout
+  :: (MonadError GitError m, MonadIO m, HasCallStack)
+  => FilePath -- ^ Path to a Git repository on disk
+  -> RevSpec -- ^ The revision of the Git repository we want to check out
+  -> FilePath -- ^ The path to the checkout
+  -> m ()
+ensureCheckout repoPath revSpec workTreePath = do
+  hash@(Hash hashText) <- hashForRev revSpec
+  let canonicalTree = repoPath </> ("rev-" <> toS hashText)
+  -- XXX: What happens if we already have a checkout?! If the current checkout
+  -- already *is* this checkout?
+  addWorkTree canonicalTree hash
+  oldTree <- liftIO $ swapSymlink workTreePath canonicalTree
+  for_ oldTree removeWorkTree
 
-
--- | Get the SHA1 of a revision spec remotely.
-remoteHashForRev :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> Branch -> RevSpec -> m Hash
-remoteHashForRev repoPath (Branch branch) (RevSpec rev) = do
-  (out, _) <- runGitInRepo repoPath ["ls-remote", "-q", "origin", ref]
-  pure . Hash . Text.strip . fst . Text.breakOn "\t" $ out
   where
-    ref = case rev of
-            "HEAD" -> "refs/heads/" <> branch
-            _ -> "refs/tags/" <> rev <> "^{}"
+    -- | Get the SHA-1 of a revision.
+    hashForRev :: (HasCallStack, MonadError GitError m, MonadIO m) => RevSpec -> m Hash
+    hashForRev (RevSpec rev) = Hash . Text.strip . fst <$> runGitInRepo repoPath ["rev-list", "-n1", rev]
 
+    -- | Checkout a branch of a repo to a given path.
+    addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()
+    addWorkTree path (Hash hash) = do
+      void $ runGitInRepo repoPath ["worktree", "add", toS path, hash]
+      -- XXX: See comment in swapSymlink
+      let relativeWorkingPath = makeRelative repoPath (toS path)
+      let gitDirRef = "gitdir: " <> ("../worktrees" </> relativeWorkingPath) <> "\n"
+      liftIO $ writeFile (toS workTreePath </> ".git") (toS gitDirRef)
+
+    removeWorkTree path = do
+      liftIO $ removeDirectoryRecursive path
+      void $ runGitInRepo repoPath ["worktree", "prune"]
+
+    -- | Ensure the symlink at 'linkPath' points to 'newPath'. Return the target
+    -- of the old path.
+    swapSymlink :: HasCallStack => FilePath -> FilePath -> IO (Maybe FilePath)
+    swapSymlink linkPath newPath = do
+      currentPath <- getSymlink linkPath
+      let base = takeDirectory linkPath
+      -- TODO: 'makeRelative' will never return paths with '..', in a noble
+      -- attempt to prevent us shooting ourselves in the foot. (c.f.
+      -- http://neilmitchell.blogspot.co.uk/2015/10/filepaths-are-subtle-symlinks-are-hard.html)
+      -- However, we need a relative link, because the volume that we're doing
+      -- this on might be mounted at a different path on another container.
+      let newPathRelative = makeRelative base newPath
+      -- TODO: Handle tmp-link existing
+      createSymbolicLink newPathRelative (base </> "tmp-link")
+      rename (base </> "tmp-link") linkPath
+      pure currentPath
+
+    getSymlink :: HasCallStack => FilePath -> IO (Maybe FilePath)
+    getSymlink path = do
+      result <- tryJust (guard . isDoesNotExistError) (readSymbolicLink path)
+      pure $ hush result
 
 -- | Run 'git' in a repository.
 runGitInRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> [Text] -> m (Text, Text)
@@ -162,42 +165,3 @@ runProcess process = do
 -- | Get the CreateProcess for running git.
 gitCommand :: HasCallStack => Maybe FilePath -> [Text] -> CreateProcess
 gitCommand repoPath args = (proc "git" (map toS args)) { cwd = repoPath }
-
-
--- | Ensure the symlink at 'linkPath' points to 'newPath'. Return the target
--- of the old path.
-swapSymlink :: HasCallStack => FilePath -> FilePath -> IO (Maybe FilePath)
-swapSymlink linkPath newPath = do
-  currentPath <- getSymlink linkPath
-  let base = takeDirectory linkPath
-  -- TODO: 'makeRelative' will never return paths with '..', in a noble
-  -- attempt to prevent us shooting ourselves in the foot. (c.f.
-  -- http://neilmitchell.blogspot.co.uk/2015/10/filepaths-are-subtle-symlinks-are-hard.html)
-  -- However, we need a relative link, because the volume that we're doing
-  -- this on might be mounted at a different path in the other container.
-  let newPathRelative = makeRelative base newPath
-  -- TODO: Handle tmp-link existing
-  createSymbolicLink newPathRelative (base </> "tmp-link")
-  rename (base </> "tmp-link") linkPath
-  pure currentPath
-
-
-getSymlink :: HasCallStack => FilePath -> IO (Maybe FilePath)
-getSymlink path = do
-  result <- tryJust (guard . isDoesNotExistError) (readSymbolicLink path)
-  pure $ hush result
-
-
-addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> FilePath -> Branch -> m ()
-addWorkTree repoPath workTreePath (Branch branch) = do
-  -- TODO: figure out scheme for paths for concrete working trees
-  void $ runGitInRepo repoPath ["worktree", "add", toS workTreePath, "origin/" <> branch]
-  -- XXX: See comment in swapSymlink
-  let relativeWorkingPath = makeRelative repoPath (toS workTreePath)
-  let gitDirRef = "gitdir: " <> ("../worktrees" </> relativeWorkingPath) <> "\n"
-  liftIO $ writeFile (toS workTreePath </> ".git") (toS gitDirRef)
-
-
-resetWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()
-resetWorkTree workTreePath (Hash hash) =
-  void $ runGitInRepo workTreePath ["reset", "--hard", hash]
