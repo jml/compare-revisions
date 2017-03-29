@@ -28,6 +28,7 @@ module CompareRevisions.Duration
 
 import Protolude hiding (second)
 
+import Data.Aeson (FromJSON(..), ToJSON(..), withText)
 import Data.Attoparsec.Text ((<?>), Parser, double, endOfInput, signed, parseOnly)
 import Test.QuickCheck (Arbitrary)
 
@@ -36,6 +37,15 @@ import Test.QuickCheck (Arbitrary)
 -- Nothing sophisticated, rather this is intended to be a simple wrapper that
 -- implements Go-style duration parsing.
 newtype Duration = Duration { toNanoseconds :: Int64 } deriving (Eq, Ord, Show, Num, Arbitrary)
+
+instance ToJSON Duration where
+  toJSON = toJSON . formatDuration
+
+instance FromJSON Duration where
+  parseJSON = withText "Duration must be text" $ \text ->
+    case parseDuration text of
+      Nothing -> empty
+      Just duration -> pure duration
 
 mul :: RealFrac a => a -> Duration -> Duration
 mul n (Duration m) = Duration (round (n * fromIntegral m))

@@ -39,6 +39,7 @@ library
     , logging
     , lucid
     , mtl
+    , network-uri
     , optparse-applicative
     , process
     , prometheus-client
@@ -58,9 +59,11 @@ library
   exposed-modules:
       CompareRevisions
       CompareRevisions.API
+      CompareRevisions.Config
       CompareRevisions.Duration
       CompareRevisions.Git
       CompareRevisions.Kube
+      CompareRevisions.SCP
       CompareRevisions.Server.Instrument
       CompareRevisions.Server.Logging
   default-language: Haskell2010
@@ -111,7 +114,11 @@ test-suite tasty
     , servant-quickcheck
     , tasty
     , tasty-hspec
+    , text
+    , yaml
   other-modules:
+      Config
       Duration
+      SCP
       Server
   default-language: Haskell2010

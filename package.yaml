@@ -32,6 +32,7 @@ library:
     - logging
     - lucid
     - mtl
+    - network-uri
     - optparse-applicative
     - process
     - prometheus-client
@@ -76,3 +77,5 @@ tests:
       - servant-quickcheck
       - tasty
       - tasty-hspec
+      - text
+      - yaml
