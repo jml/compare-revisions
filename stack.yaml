@@ -1,8 +1,7 @@
-resolver: lts-7.19
+resolver: lts-8.6
 
 packages:
   - .
 
 extra-deps:
   - logging-3.0.4
-  - servant-quickcheck-0.0.2.1

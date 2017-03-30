@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Protolude hiding ((<>))
+import Protolude
 
 import qualified Data.Map as Map
 import Options.Applicative
