@@ -228,7 +228,7 @@ getDifferingImages sourceEnv targetEnv =
 getFiles :: FilePath -> IO [FilePath]
 getFiles directory = do
   entries <- listDirectory directory
-  let contents = [ (directory </> entry) | entry <- entries ]
+  let contents = [ directory </> entry | entry <- entries ]
   (dirs, files) <- partitionEithers <$> traverse splitDirectory contents
   filesFromSubdirs <- mconcat <$> traverse getFiles dirs
   pure (files <> filesFromSubdirs)

@@ -1,4 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 module CompareRevisions.Config
   ( Config(..)
   , ConfigRepo(..)
@@ -6,6 +8,7 @@ module CompareRevisions.Config
   , ImageConfig(..)
   , PolicyConfig(..)
   , GitURL(..)
+  , PolicyName
   ) where
 
 import Protolude hiding (Identity)
@@ -27,10 +30,12 @@ import qualified Network.URI
 import CompareRevisions.Duration (Duration)
 import CompareRevisions.SCP (SCP, formatSCP, parseSCP)
 
-data Config = Config { configRepo :: ConfigRepo
-                     , images :: Map ImageName ImageConfig
-                     , revisionPolicies :: Map PolicyName PolicyConfig
-                     } deriving (Eq, Ord, Show, Generic)
+data Config
+  = Config
+  { configRepo :: ConfigRepo
+  , images :: Map ImageName (ImageConfig PolicyName)
+  , revisionPolicies :: Map PolicyName PolicyConfig
+  } deriving (Eq, Ord, Show, Generic)
 
 configOptions :: Options
 configOptions = defaultOptions { fieldLabelModifier = camelTo2 '-' }
@@ -41,6 +46,7 @@ instance ToJSON Config where
 instance FromJSON Config where
   parseJSON = genericParseJSON configOptions
 
+-- TODO: Dedupe with ImageName in Kube
 type ImageName = Text
 type PolicyName = Text
 
@@ -84,19 +90,19 @@ type EnvironmentName = Text
 instance FromJSON Environment
 instance ToJSON Environment
 
-data ImageConfig
+data ImageConfig policy
   = ImageConfig
   { gitURL :: GitURL
-  , imageToRevisionPolicy :: PolicyName
+  , imageToRevisionPolicy :: policy
   } deriving (Eq, Ord, Show, Generic)
 
 imageConfigOptions :: Options
 imageConfigOptions = defaultOptions { fieldLabelModifier = camelTo2 '-' }
 
-instance ToJSON ImageConfig where
+instance ToJSON policy => ToJSON (ImageConfig policy) where
   toJSON = genericToJSON imageConfigOptions
 
-instance FromJSON ImageConfig where
+instance FromJSON policy => FromJSON (ImageConfig policy) where
   parseJSON = genericParseJSON imageConfigOptions
 
 data PolicyConfig

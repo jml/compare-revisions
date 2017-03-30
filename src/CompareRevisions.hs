@@ -17,7 +17,7 @@ import Network.Wai.Handler.Warp
 import qualified Network.Wai.Middleware.RequestLogger as RL
 import Options.Applicative
        (ParserInfo, auto, eitherReader, execParser, fullDesc, header,
-        help, helper, info, long, metavar, option, progDesc, switch, value)
+        help, helper, info, long, metavar, option, progDesc, str, switch, value)
 import qualified Prometheus as Prom
 import qualified Prometheus.Metric.GHC as Prom
 import Servant (serve)
@@ -34,6 +34,7 @@ data Config = Config
   , accessLogs :: AccessLogs
   , logLevel :: LogLevel
   , enableGhcMetrics :: Bool
+  , configFile :: FilePath
   } deriving (Show)
 
 -- | What level of access logs to show.
@@ -72,6 +73,11 @@ options = info (helper <*> parser) description
         (fold
            [ long "ghc-metrics"
            , help "Export GHC metrics. Requires running with +RTS."
+           ]) <*>
+      option str
+        (fold
+           [ long "config-file"
+           , help "Path to YAML file describing Git repositories to sync."
            ])
 
     parseAccessLogs "none" = pure Disabled
@@ -83,7 +89,7 @@ options = info (helper <*> parser) description
       fold
         [ fullDesc
         , progDesc "Show how sets of images differ, by revision"
-        , header "compare-revisions - TODO fill this in"
+        , header "compare-revisions - webservice to compare k8s clusters"
         ]
 
 runApp :: Config -> IO ()
