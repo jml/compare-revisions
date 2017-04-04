@@ -7,7 +7,6 @@ module CompareRevisions.Config
   , Environment(..)
   , ImageConfig(..)
   , PolicyConfig(..)
-  , GitURL(..)
   , PolicyName
   ) where
 
@@ -22,13 +21,12 @@ import Data.Aeson
   , defaultOptions
   , genericParseJSON
   , genericToJSON
-  , withText
   )
 import Data.Aeson.Types (Options(..), SumEncoding(..), camelTo2, typeMismatch)
 import qualified Data.Char as Char
-import qualified Network.URI
+
+import qualified CompareRevisions.Git as Git
 import CompareRevisions.Duration (Duration)
-import CompareRevisions.SCP (SCP, formatSCP, parseSCP)
 
 data Config
   = Config
@@ -50,21 +48,9 @@ instance FromJSON Config where
 type ImageName = Text
 type PolicyName = Text
 
-data GitURL = URI Network.URI.URI
-            | SCP SCP
-            deriving (Eq, Ord, Show, Generic)
-
-instance ToJSON GitURL where
-  toJSON (URI uri) = toJSON (Network.URI.uriToString identity uri "")
-  toJSON (SCP scp) = toJSON (formatSCP scp)
-
-instance FromJSON GitURL where
-  parseJSON = withText "URI must be text" $ \text ->
-    maybe empty pure (URI <$> Network.URI.parseAbsoluteURI (toS text)) <|> (SCP <$> parseSCP text)
-
 data ConfigRepo
   = ConfigRepo
-    { url :: GitURL
+    { url :: Git.URL
     , pollInterval :: Duration
     , sourceEnv :: Environment
     , targetEnv :: Environment
@@ -92,7 +78,7 @@ instance ToJSON Environment
 
 data ImageConfig policy
   = ImageConfig
-  { gitURL :: GitURL
+  { gitURL :: Git.URL
   , imageToRevisionPolicy :: policy
   } deriving (Eq, Ord, Show, Generic)
 

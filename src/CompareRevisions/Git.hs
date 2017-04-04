@@ -3,8 +3,9 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 module CompareRevisions.Git
-  ( Url(..)
+  ( URL(..)
   , GitError(..)
+  , RevSpec(..)
   , ensureCheckout
   , syncRepo
   ) where
@@ -12,7 +13,8 @@ module CompareRevisions.Git
 import Protolude
 
 import qualified Data.Text as Text
-import Data.Yaml (FromJSON)
+import Data.Aeson (FromJSON(..), ToJSON(..), withText)
+import qualified Network.URI
 import System.Directory (removeDirectoryRecursive)
 import System.FilePath ((</>), makeRelative, takeDirectory)
 import System.IO.Error (isDoesNotExistError)
@@ -30,8 +32,25 @@ import System.Process
   , showCommandForUser
   )
 
+import CompareRevisions.SCP (SCP, formatSCP, parseSCP)
+
 -- | The URL to a Git repository.
-newtype Url = Url Text deriving (Eq, Ord, Show, Generic, FromJSON)
+data URL
+  = URI Network.URI.URI
+  | SCP SCP
+  deriving (Eq, Ord, Show, Generic)
+
+toText :: URL -> Text
+toText (URI uri) = toS $ Network.URI.uriToString identity uri ""
+toText (SCP scp) = formatSCP scp
+
+instance ToJSON URL where
+  toJSON = toJSON . toText
+
+instance FromJSON URL where
+  parseJSON = withText "URI must be text" $ \text ->
+    maybe empty pure (URI <$> Network.URI.parseAbsoluteURI (toS text)) <|> (SCP <$> parseSCP text)
+
 
 -- | A Git branch.
 newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON)
@@ -56,7 +75,7 @@ data GitError
 -- If it does, it will be updated.
 syncRepo
   :: (MonadIO m, MonadError GitError m, HasCallStack)
-  => Url -- ^ URL of Git repository to synchronize
+  => URL -- ^ URL of Git repository to synchronize
   -> FilePath -- ^ Where to store the bare Git repository
   -> m ()
 syncRepo url repoPath = do
@@ -66,8 +85,8 @@ syncRepo url repoPath = do
     else cloneRepo url repoPath
 
 -- | Clone a Git repository.
-cloneRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => Url -> FilePath -> m ()
-cloneRepo (Url url) gitRoot = void $ runGit (["clone", "--mirror"] <> [url, toS gitRoot])
+cloneRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => URL -> FilePath -> m ()
+cloneRepo url gitRoot = void $ runGit (["clone", "--mirror"] <> [toText url, toS gitRoot])
 
 -- | Fetch the latest changes to a Git repository.
 fetchRepo :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> m ()

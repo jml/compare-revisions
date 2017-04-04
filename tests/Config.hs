@@ -9,6 +9,7 @@ import Test.Tasty.Hspec (testSpec, describe, it, shouldBe)
 
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Duration as Duration
+import qualified CompareRevisions.Git as Git
 import CompareRevisions.SCP (SCP(..))
 
 tests :: IO TestTree
@@ -56,7 +57,7 @@ parsedReadmeExample =
   Config.Config repo images policies
   where
     repo = Config.ConfigRepo
-           { url = Config.SCP (AuthRemoteFile "git" "github.com" "my-org/service-config.git")
+           { url = Git.SCP (AuthRemoteFile "git" "github.com" "my-org/service-config.git")
            , pollInterval = 1 * Duration.minute
            , sourceEnv = Config.Environment
                          { name = "dev"
@@ -68,7 +69,7 @@ parsedReadmeExample =
                          }
            }
     images = [ ("weaveworks/cortex", Config.ImageConfig
-                                     { gitURL = Config.SCP (AuthRemoteFile "git" "github.com" "weaveworks/cortex.git")
+                                     { gitURL = Git.SCP (AuthRemoteFile "git" "github.com" "weaveworks/cortex.git")
                                      , imageToRevisionPolicy = "weaveworks"
                                      })
              ]
