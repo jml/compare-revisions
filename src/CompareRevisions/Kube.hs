@@ -182,11 +182,11 @@ mapDiff source target = Map.fromList (go (Map.toAscList source) (Map.toAscList t
 -- | Here, an environment is a mapping from Kubernetes to their definitions.
 type Env = Map KubeObject Value
 
-loadEnvFromDisk :: FilePath -> IO Env
+loadEnvFromDisk :: MonadIO m => FilePath -> m Env
 loadEnvFromDisk directory = do
   files <- getFiles directory
   let yamlFiles = [ f | f <- files, takeExtension f == ".yaml" ]
-  bytes <- traverse ByteString.readFile yamlFiles
+  bytes <- traverse (liftIO . ByteString.readFile) yamlFiles
   let values = mapMaybe Yaml.decode bytes -- ignore files that don't parse to yaml
   pure (Map.fromList (mapMaybe valueToPair values)) -- ignore yaml that doesn't look like kubeobject
   where
@@ -225,18 +225,18 @@ getDifferingImages sourceEnv targetEnv =
 
 
 -- | Breadth-first traversal of @directory@, yielding all files.
-getFiles :: FilePath -> IO [FilePath]
+getFiles :: MonadIO io => FilePath -> io [FilePath]
 getFiles directory = do
-  entries <- listDirectory directory
+  entries <- liftIO $ listDirectory directory
   let contents = [ directory </> entry | entry <- entries ]
   (dirs, files) <- partitionEithers <$> traverse splitDirectory contents
   filesFromSubdirs <- mconcat <$> traverse getFiles dirs
   pure (files <> filesFromSubdirs)
   where
     -- | If @entry@ is a directory, @Left entry@, otherwise @Right entry@.
-    splitDirectory :: FilePath -> IO (Either FilePath FilePath)
+    splitDirectory :: MonadIO m => FilePath -> m (Either FilePath FilePath)
     splitDirectory entry = do
-      stat <- getFileStatus entry
+      stat <- liftIO $ getFileStatus entry
       pure $ if isDirectory stat
              then Left entry
              else Right entry
