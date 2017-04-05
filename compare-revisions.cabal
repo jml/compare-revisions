@@ -67,6 +67,7 @@ library
       CompareRevisions.Git
       CompareRevisions.Kube
       CompareRevisions.SCP
+      CompareRevisions.Server
       CompareRevisions.Server.Instrument
       CompareRevisions.Server.Logging
       CompareRevisions.Validator
