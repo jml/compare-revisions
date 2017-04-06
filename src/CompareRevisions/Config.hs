@@ -1,13 +1,19 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+-- | Configuration for compare-revisions.
 module CompareRevisions.Config
-  ( Config(..)
+  (
+  -- * YAML files
+    Config(..)
   , ConfigRepo(..)
   , Environment(..)
   , ImageConfig(..)
   , PolicyConfig(..)
   , PolicyName
+  -- * Command line
+  , AppConfig(..)
+  , flags
   ) where
 
 import Protolude hiding (Identity)
@@ -24,15 +30,41 @@ import Data.Aeson
   )
 import Data.Aeson.Types (Options(..), SumEncoding(..), camelTo2, typeMismatch)
 import qualified Data.Char as Char
+import Options.Applicative (Parser, help, long, option, str)
 
-import qualified CompareRevisions.Git as Git
 import CompareRevisions.Duration (Duration)
+import qualified CompareRevisions.Git as Git
 
+
+-- | Configuration specific to compare-revisions.
+data AppConfig = AppConfig
+  { configFile :: FilePath
+  , gitRepoDir :: FilePath
+  } deriving (Eq, Show)
+
+-- | Command-line flags for specifying the app's configuration.
+flags :: Parser AppConfig
+flags =
+  AppConfig
+  <$> option str
+        (fold
+           [ long "config-file"
+           , help "Path to YAML file describing Git repositories to sync."
+           ])
+  <*> option str
+        (fold
+           [ long "git-repo-dir"
+           , help "Directory to store all the Git repositories in."
+           ])
+
+-- | User-specified configuration for compare-revisions.
+--
+-- This is how the configuration is given in, say, a YAML file.
 data Config
   = Config
-  { configRepo :: ConfigRepo
-  , images :: Map ImageName (ImageConfig PolicyName)
-  , revisionPolicies :: Map PolicyName PolicyConfig
+  { configRepo :: ConfigRepo  -- ^ The repository that has the Kubernetes manifests.
+  , images :: Map ImageName (ImageConfig PolicyName)  -- ^ Information about the source code of the images.
+  , revisionPolicies :: Map PolicyName PolicyConfig -- ^ How to go from information about images to revisions.
   } deriving (Eq, Ord, Show, Generic)
 
 configOptions :: Options
@@ -48,12 +80,13 @@ instance FromJSON Config where
 type ImageName = Text
 type PolicyName = Text
 
+-- | The repository with the Kubernetes manifests in it.
 data ConfigRepo
   = ConfigRepo
-    { url :: Git.URL
-    , pollInterval :: Duration
-    , sourceEnv :: Environment
-    , targetEnv :: Environment
+    { url :: Git.URL -- ^ Where to download the repository from
+    , pollInterval :: Duration -- ^ How frequently to download it
+    , sourceEnv :: Environment -- ^ How to find information about the source environment in the checkout
+    , targetEnv :: Environment -- ^ How to find information about the target environment in the checkout
     } deriving (Eq, Ord, Show, Generic)
 
 configRepoOptions :: Options

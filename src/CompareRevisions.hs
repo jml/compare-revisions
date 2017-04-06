@@ -1,59 +1,26 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE DataKinds #-}
-
--- | Serve the API as an HTTP server.
+-- | Entry point for compare-revisions.
 module CompareRevisions
-  ( server
-  , startApp
+  ( startApp
   ) where
 
 import Protolude
 
-import Options.Applicative
-       (Parser, ParserInfo, execParser, fullDesc, header,
-        help, helper, info, long, option, progDesc, str)
+import Options.Applicative (ParserInfo, execParser, fullDesc, header, helper, info, progDesc)
 import Servant (serve)
 
-import CompareRevisions.API (api, server)
+import qualified CompareRevisions.API as API
 
+import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Server as Server
 
+-- | Overall command-line configuration.
+data Config = Config Config.AppConfig Server.Config deriving (Eq, Show)
 
-
--- | Configuration specific to compare-revisions.
-data AppConfig = AppConfig
-  { _configFile :: FilePath
-  , _gitRepoDir :: FilePath
-  } deriving (Eq, Show)
-
-appFlags :: Parser AppConfig
-appFlags =
-  AppConfig
-  <$> option str
-        (fold
-           [ long "config-file"
-           , help "Path to YAML file describing Git repositories to sync."
-           ])
-  <*> option str
-        (fold
-           [ long "git-repo-dir"
-           , help "Directory to store all the Git repositories in."
-           ])
-
-
-data Config = Config AppConfig Server.Config deriving (Eq, Show)
-
--- | Run the service.
-startApp :: IO ()
-startApp = do
-  Config _appConfig serverConfig <- execParser options
-  let app = serve api server
-  Server.run serverConfig app
-
+-- | Command-line parser for compare-revisions.
 options :: ParserInfo Config
 options = info (helper <*> parser) description
   where
-    parser = Config <$> appFlags <*> Server.flags
+    parser = Config <$> Config.flags <*> Server.flags
 
     description =
       fold
@@ -62,3 +29,9 @@ options = info (helper <*> parser) description
         , header "compare-revisions - webservice to compare k8s clusters"
         ]
 
+-- | Run the service.
+startApp :: IO ()
+startApp = do
+  Config _appConfig serverConfig <- execParser options
+  let app = serve API.api API.server
+  Server.run serverConfig app
