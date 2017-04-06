@@ -32,6 +32,6 @@ options = info (helper <*> parser) description
 -- | Run the service.
 startApp :: IO ()
 startApp = do
-  Config _appConfig serverConfig <- execParser options
-  let app = serve API.api API.server
+  Config appConfig serverConfig <- execParser options
+  let app = serve API.api (API.server appConfig)
   Server.run serverConfig app

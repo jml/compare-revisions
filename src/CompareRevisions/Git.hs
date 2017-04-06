@@ -12,6 +12,7 @@ module CompareRevisions.Git
 
 import Protolude
 
+import qualified Control.Logging as Log
 import qualified Data.Text as Text
 import Data.Aeson (FromJSON(..), ToJSON(..), withText)
 import qualified Network.URI
@@ -79,10 +80,16 @@ syncRepo
   -> FilePath -- ^ Where to store the bare Git repository
   -> m ()
 syncRepo url repoPath = do
+  Log.debug' $ "Syncing " <> show url <> " to " <> show repoPath
   repoExists <- liftIO $ fileExist repoPath
   if repoExists
-    then fetchRepo repoPath
-    else cloneRepo url repoPath
+    then do
+      Log.debug' "Update existing repo"
+      fetchRepo repoPath
+    else do
+      Log.debug' "Downloading new repo"
+      cloneRepo url repoPath
+  Log.debug' "Repo updated"
 
 -- | Clone a Git repository.
 cloneRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => URL -> FilePath -> m ()
@@ -108,13 +115,16 @@ ensureCheckout
   -> FilePath -- ^ The path to the checkout
   -> m ()
 ensureCheckout repoPath revSpec workTreePath = do
+  Log.debug' $ "Ensuring checkout of " <> toS repoPath <> " to " <> show revSpec <> " at " <> toS workTreePath
   hash@(Hash hashText) <- hashForRev revSpec
   let canonicalTree = repoPath </> ("rev-" <> toS hashText)
-  -- XXX: What happens if we already have a checkout?! If the current checkout
-  -- already *is* this checkout?
   addWorkTree canonicalTree hash
   oldTree <- liftIO $ swapSymlink workTreePath canonicalTree
-  for_ oldTree removeWorkTree
+  case oldTree of
+    Nothing -> pass
+    Just oldTreePath
+      | oldTreePath == canonicalTree -> pass
+      | otherwise -> removeWorkTree oldTreePath
 
   where
     -- | Get the SHA-1 of a revision.
@@ -124,32 +134,39 @@ ensureCheckout repoPath revSpec workTreePath = do
     -- | Checkout a branch of a repo to a given path.
     addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()
     addWorkTree path (Hash hash) = do
-      void $ runGitInRepo repoPath ["worktree", "add", toS path, hash]
-      -- XXX: See comment in swapSymlink
-      let relativeWorkingPath = makeRelative repoPath (toS path)
-      let gitDirRef = "gitdir: " <> ("../worktrees" </> relativeWorkingPath) <> "\n"
-      liftIO $ writeFile (toS workTreePath </> ".git") (toS gitDirRef)
+      alreadyThere <- liftIO $ fileExist path
+      -- TODO: Doesn't handle case where path exists but is a file (not a
+      -- directory), or doesn't contain a valid worktree.
+      unless alreadyThere $ do
+        void $ runGitInRepo repoPath ["worktree", "add", toS path, hash]
+        Log.debug' $ "Added work tree at " <> toS path
 
     removeWorkTree path = do
       liftIO $ removeDirectoryRecursive path
       void $ runGitInRepo repoPath ["worktree", "prune"]
+      Log.debug' $ "Removed worktree from " <> toS path
 
     -- | Ensure the symlink at 'linkPath' points to 'newPath'. Return the target
-    -- of the old path.
+    -- of the old path if it differs from the new path.
     swapSymlink :: HasCallStack => FilePath -> FilePath -> IO (Maybe FilePath)
     swapSymlink linkPath newPath = do
+      Log.debug' $ "Updating symlink " <> toS linkPath <> " to point to " <> toS newPath
       currentPath <- getSymlink linkPath
+      Log.debug' $ "Symlink currently points to: " <> show currentPath
       let base = takeDirectory linkPath
-      -- TODO: 'makeRelative' will never return paths with '..', in a noble
-      -- attempt to prevent us shooting ourselves in the foot. (c.f.
-      -- http://neilmitchell.blogspot.co.uk/2015/10/filepaths-are-subtle-symlinks-are-hard.html)
-      -- However, we need a relative link, because the volume that we're doing
-      -- this on might be mounted at a different path on another container.
       let newPathRelative = makeRelative base newPath
-      -- TODO: Handle tmp-link existing
-      createSymbolicLink newPathRelative (base </> "tmp-link")
-      rename (base </> "tmp-link") linkPath
-      pure currentPath
+      if Just newPathRelative == currentPath
+        then pure Nothing
+        else
+        do let tmpLink = base </> "tmp-link"
+           -- TODO: Handle tmp-link existing, or better yet, make it somewhere
+           -- completely different.
+           Log.debug' $ "Creating new link to " <> toS newPathRelative <> " at " <> toS tmpLink
+           createSymbolicLink newPathRelative tmpLink
+           Log.debug' $ "Renaming " <> toS tmpLink <> " to " <> toS linkPath
+           rename (base </> "tmp-link") linkPath
+           Log.debug' $ "Swapped symlink: " <> toS linkPath <> " now points to " <> toS newPath
+           pure currentPath
 
     getSymlink :: HasCallStack => FilePath -> IO (Maybe FilePath)
     getSymlink path = do
@@ -167,13 +184,17 @@ runGit args = runProcess $ gitCommand Nothing args
 -- | Run a process.
 runProcess :: (HasCallStack, MonadError GitError m, MonadIO m) => CreateProcess -> m (Text, Text)
 runProcess process = do
-  -- TODO: logging
+  Log.debug' $ "Running process: " <> toS cmdInfo <> "; " <> show process
   (exitCode, out, err) <- liftIO $ readCreateProcessWithExitCode process ""
   let out' = toS out
   let err' = toS err
   case exitCode of
-    ExitFailure e -> throwError $ GitProcessError (toS cmdInfo) e out' err' (cwd process)
-    ExitSuccess -> pure (out', err')
+    ExitFailure e -> do
+      Log.warn' $ "Process failed (" <> show e <> "): " <> toS cmdInfo
+      throwError $ GitProcessError (toS cmdInfo) e out' err' (cwd process)
+    ExitSuccess -> do
+      Log.debug' $ "Process succeeded: " <> toS cmdInfo
+      pure (out', err')
   where
     cmdInfo =
       case spec of
@@ -182,5 +203,5 @@ runProcess process = do
     spec = cmdspec process
 
 -- | Get the CreateProcess for running git.
-gitCommand :: HasCallStack => Maybe FilePath -> [Text] -> CreateProcess
+gitCommand :: Maybe FilePath -> [Text] -> CreateProcess
 gitCommand repoPath args = (proc "git" (map toS args)) { cwd = repoPath }

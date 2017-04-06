@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 module CompareRevisions.Kube
   ( -- * Objects in Kubernetes
@@ -38,7 +39,9 @@ data KubeObject
   = KubeObject { namespace :: Namespace
                , kind :: Kind
                , name :: Name
-               } deriving (Eq, Ord, Show)
+               } deriving (Eq, Ord, Show, Generic)
+
+instance Aeson.ToJSON KubeObject
 
 -- | A Kubernetes namespace. e.g. "default".
 type Namespace = Text
@@ -146,7 +149,9 @@ data ImageDiff
   = ImageAdded ImageName (Maybe ImageLabel)
   | ImageChanged ImageName (Maybe ImageLabel) (Maybe ImageLabel)
   | ImageRemoved ImageName (Maybe ImageLabel)
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Generic)
+
+instance Aeson.ToJSON ImageDiff
 
 compareImages :: Images -> Images -> [ImageDiff]
 compareImages source target =
