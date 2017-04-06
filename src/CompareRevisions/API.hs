@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -62,7 +63,7 @@ instance MimeRender HTML RootPage where
           L.li_ $ L.a_ [L.href_ "/metrics"] (L.code_ "/metrics")
           L.li_ $ L.a_ [L.href_ "/status"] (L.code_ "/status")
           L.p_ $ do
-            "Source code at"
+            "Source code at "
             L.a_ [L.href_ sourceURL] (L.toHtml sourceURL)
    where
      title = "compare-revisions"
@@ -83,14 +84,32 @@ instance ToJSON ImageDiffs where
                        ]
         )
 
+-- TODO: Switch to servant-lucid for less boilerplate with HTML rendering.
+
 instance MimeRender HTML ImageDiffs where
-  mimeRender _ _ =
+  mimeRender _ (ImageDiffs diffs) =
     L.renderBS $ L.doctypehtml_ $ do
       L.head_ (L.title_ title)
-      L.body_ $
+      L.body_ $ do
         L.h1_ title
+        L.table_ $ do
+          L.tr_ $ do
+            L.th_ "Image"
+            L.th_ "dev"
+            L.th_ "prod" -- TODO: Read this from the data structure
+          rows
     where
-      title = "diff"
+      title = "compare-images"
+      rows = mconcat (map (L.tr_ . toRow) flattenedImages)
+
+      flattenedImages = sortOn Kube.getImageName (ordNub (fold diffs))
+
+      toRow (Kube.ImageAdded name label) = nameCell name <> labelCell label <> L.td_ "ADDED"
+      toRow (Kube.ImageChanged name oldLabel newLabel) = nameCell name <> labelCell oldLabel <> labelCell newLabel
+      toRow (Kube.ImageRemoved name label) = nameCell name <> L.td_ "REMOVED" <> labelCell label
+
+      nameCell = L.td_ . L.toHtml
+      labelCell = L.td_ . L.toHtml . fromMaybe "<no label>"
 
 
 -- | compare-revisions API implementation.

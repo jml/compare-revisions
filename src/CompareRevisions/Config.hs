@@ -81,6 +81,7 @@ type ImageName = Text
 type PolicyName = Text
 
 -- | The repository with the Kubernetes manifests in it.
+-- TODO: Credentials are missing
 data ConfigRepo
   = ConfigRepo
     { url :: Git.URL -- ^ Where to download the repository from

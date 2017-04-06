@@ -18,6 +18,7 @@ module CompareRevisions.Kube
     -- * Image diffs
   , ImageDiff(..)
   , getDifferingImages
+  , getImageName
   ) where
 
 import Protolude
@@ -152,6 +153,11 @@ data ImageDiff
   deriving (Eq, Ord, Show, Generic)
 
 instance Aeson.ToJSON ImageDiff
+
+getImageName :: ImageDiff -> ImageName
+getImageName (ImageAdded name _) = name
+getImageName (ImageChanged name _ _) = name
+getImageName (ImageRemoved name _) = name
 
 compareImages :: Images -> Images -> [ImageDiff]
 compareImages source target =
