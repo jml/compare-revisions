@@ -84,6 +84,7 @@ type PolicyName = Text
 data ConfigRepo
   = ConfigRepo
     { url :: Git.URL -- ^ Where to download the repository from
+    , branch :: Maybe Git.Branch -- ^ The branch with the configs in it
     , pollInterval :: Duration -- ^ How frequently to download it
     , sourceEnv :: Environment -- ^ How to find information about the source environment in the checkout
     , targetEnv :: Environment -- ^ How to find information about the target environment in the checkout

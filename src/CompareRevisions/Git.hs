@@ -4,8 +4,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 module CompareRevisions.Git
   ( URL(..)
+  , Branch(..)
   , GitError(..)
-  , RevSpec(..)
   , ensureCheckout
   , syncRepo
   ) where
@@ -54,13 +54,10 @@ instance FromJSON URL where
 
 
 -- | A Git branch.
-newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON)
+newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON, ToJSON)
 
 -- | A SHA-1 hash for a Git revision.
 newtype Hash = Hash Text deriving (Eq, Ord, Show, Generic, FromJSON)
-
--- | The human specification for a Git revision. e.g. 'HEAD', 'origin/master'.
-newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show)
 
 -- XXX: Not sure this is a good idea. Maybe use exceptions all the way
 -- through?
@@ -85,6 +82,7 @@ syncRepo url repoPath = do
   if repoExists
     then do
       Log.debug' "Update existing repo"
+      -- TODO: Wrongly assumes 'origin' is the same
       fetchRepo repoPath
     else do
       Log.debug' "Downloading new repo"
@@ -111,12 +109,12 @@ fetchRepo repoPath = void $ runGitInRepo repoPath ["fetch", "--all", "--prune"]
 ensureCheckout
   :: (MonadError GitError m, MonadIO m, HasCallStack)
   => FilePath -- ^ Path to a Git repository on disk
-  -> RevSpec -- ^ The revision of the Git repository we want to check out
+  -> Branch -- ^ The branch we want to check out
   -> FilePath -- ^ The path to the checkout
   -> m ()
-ensureCheckout repoPath revSpec workTreePath = do
-  Log.debug' $ "Ensuring checkout of " <> toS repoPath <> " to " <> show revSpec <> " at " <> toS workTreePath
-  hash@(Hash hashText) <- hashForRev revSpec
+ensureCheckout repoPath branch workTreePath = do
+  Log.debug' $ "Ensuring checkout of " <> toS repoPath <> " to " <> show branch <> " at " <> toS workTreePath
+  hash@(Hash hashText) <- hashForBranchHead branch
   let canonicalTree = repoPath </> ("rev-" <> toS hashText)
   addWorkTree canonicalTree hash
   oldTree <- liftIO $ swapSymlink workTreePath canonicalTree
@@ -127,9 +125,9 @@ ensureCheckout repoPath revSpec workTreePath = do
       | otherwise -> removeWorkTree oldTreePath
 
   where
-    -- | Get the SHA-1 of a revision.
-    hashForRev :: (HasCallStack, MonadError GitError m, MonadIO m) => RevSpec -> m Hash
-    hashForRev (RevSpec rev) = Hash . Text.strip . fst <$> runGitInRepo repoPath ["rev-list", "-n1", rev]
+    -- | Get the SHA-1 of the head of a branch.
+    hashForBranchHead :: (HasCallStack, MonadError GitError m, MonadIO m) => Branch -> m Hash
+    hashForBranchHead (Branch b) = Hash . Text.strip . fst <$> runGitInRepo repoPath ["rev-list", "-n1", b]
 
     -- | Checkout a branch of a repo to a given path.
     addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()

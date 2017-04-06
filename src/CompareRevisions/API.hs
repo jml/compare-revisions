@@ -108,7 +108,8 @@ images appConfig = do
       let gitURL = Config.url configRepo
       let srcEnv = Config.sourceEnv configRepo
       let tgtEnv = Config.targetEnv configRepo
-      diff <- withExceptT to500 $ Engine.compareImages (Config.gitRepoDir appConfig) gitURL (Git.RevSpec "origin/master") srcEnv tgtEnv
+      let branch = fromMaybe (Git.Branch "master") (Config.branch configRepo)
+      diff <- withExceptT to500 $ Engine.compareImages (Config.gitRepoDir appConfig) gitURL branch srcEnv tgtEnv
       pure (ImageDiffs diff)
   where
     to500 err = err500 { errBody = show err}

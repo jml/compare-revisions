@@ -76,13 +76,13 @@ compareImages
   :: (HasCallStack, MonadError Git.GitError m, MonadIO m)
   => FilePath
   -> Git.URL
-  -> Git.RevSpec
+  -> Git.Branch
   -> Config.Environment
   -> Config.Environment
   -> m (Map KubeObject [ImageDiff])
-compareImages rootDirectory configRepoURL revSpec src tgt = do
+compareImages rootDirectory configRepoURL branch src tgt = do
   Git.syncRepo configRepoURL repoPath
-  Git.ensureCheckout repoPath revSpec checkoutPath
+  Git.ensureCheckout repoPath branch checkoutPath
   Kube.getDifferingImages <$> loadEnv src <*> loadEnv tgt
   where
     repoPath = rootDirectory </> "repos"

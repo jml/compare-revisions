@@ -58,6 +58,7 @@ parsedReadmeExample =
   where
     repo = Config.ConfigRepo
            { url = Git.SCP (AuthRemoteFile "git" "github.com" "my-org/service-config.git")
+           , branch = Nothing
            , pollInterval = 1 * Duration.minute
            , sourceEnv = Config.Environment
                          { name = "dev"
