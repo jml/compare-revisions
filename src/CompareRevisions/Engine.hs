@@ -2,6 +2,7 @@
 module CompareRevisions.Engine
   ( ValidConfig(..)
   , compareImages
+  , compareRevisions
   , loadConfigFile
   ) where
 
@@ -18,11 +19,13 @@ import qualified Prometheus as Prom
 import System.Directory (canonicalizePath)
 import System.FilePath ((</>), takeDirectory)
 import System.FSNotify (Event(..), StopListening, WatchManager, eventPath, watchDir)
+import Text.Regex.TDFA (Regex, makeRegexM)
 
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Git as Git
 import qualified CompareRevisions.Kube as Kube
 import CompareRevisions.Kube (KubeObject(..), ImageDiff(..))
+import CompareRevisions.Regex (regexReplace)
 import CompareRevisions.Validator (Validator, runValidator, throwE)
 
 -- | Metrics used in reporting application.
@@ -88,6 +91,30 @@ compareImages rootDirectory configRepoURL branch src tgt = do
     repoPath = rootDirectory </> "repos"
     checkoutPath = rootDirectory </> "config-repo"
     loadEnv env = Kube.loadEnvFromDisk (checkoutPath </> Config.path env)
+
+
+compareRevisions
+  :: (MonadIO m, MonadError Git.GitError m)
+  => Config.PolicyConfig
+  -> Git.URL
+  -> FilePath
+  -> Kube.ImageLabel
+  -> Kube.ImageLabel
+  -> m (Maybe [Git.Revision])
+compareRevisions labelPolicy repoURL repoPath startLabel endLabel = do
+  Git.syncRepo repoURL repoPath
+  let startRev = getRevision labelPolicy startLabel
+  let endRev = getRevision labelPolicy endLabel
+  sequenceA (Git.getLog repoPath <$> startRev <*> endRev)
+
+
+getRevision :: Config.PolicyConfig -> Kube.ImageLabel -> Maybe Git.RevSpec
+getRevision Config.Identity label = pure . Git.RevSpec $ label
+getRevision Config.Regex{..} label = do
+  let regex = makeRegexM (toS match :: ByteString) :: Maybe Regex
+  case regex of
+    Nothing -> Nothing
+    Just re -> Git.RevSpec . toS <$> regexReplace re (toS output) (toS label)
 
 
 -- | Configuration we need to compare a cluster.

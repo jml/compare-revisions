@@ -49,6 +49,7 @@ library
     , regex-tdfa
     , QuickCheck
     , servant
+    , servant-lucid
     , servant-server
     , stm
     , text

@@ -5,9 +5,12 @@
 module CompareRevisions.Git
   ( URL(..)
   , Branch(..)
+  , RevSpec(..)
+  , Revision(..)
   , GitError(..)
   , ensureCheckout
   , syncRepo
+  , getLog
   ) where
 
 import Protolude
@@ -58,6 +61,15 @@ newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON, ToJSON)
 
 -- | A SHA-1 hash for a Git revision.
 newtype Hash = Hash Text deriving (Eq, Ord, Show, Generic, FromJSON)
+
+-- | Specifies a revision in a Git repository.
+newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show, Generic, FromJSON)
+
+-- | A Git revision.
+--
+-- Should actually contain structured data, but for now we'll just have the
+-- direct output of @git log@.
+newtype Revision = Revision Text deriving (Eq, Ord, Show)
 
 -- XXX: Not sure this is a good idea. Maybe use exceptions all the way
 -- through?
@@ -170,6 +182,14 @@ ensureCheckout repoPath branch workTreePath = do
     getSymlink path = do
       result <- tryJust (guard . isDoesNotExistError) (readSymbolicLink path)
       pure $ hush result
+
+getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> m [Revision]
+getLog repoPath (RevSpec start) (RevSpec end) = do
+  -- XXX: This is a crappy way of generating parseable revisions.
+  (out, _) <- runGitInRepo repoPath ["log", "--format='%h::%an::%s'", range]
+  pure (map Revision (Text.lines out))
+  where
+    range = start <> ".." <> end
 
 -- | Run 'git' in a repository.
 runGitInRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> [Text] -> m (Text, Text)
