@@ -21,6 +21,7 @@ library:
   source-dirs: src
   dependencies:
     - aeson
+    - array
     - attoparsec
     - bytestring
     - containers
@@ -38,6 +39,7 @@ library:
     - process
     - prometheus-client
     - prometheus-metrics-ghc
+    - regex-tdfa
     - QuickCheck
     - servant
     - servant-server
