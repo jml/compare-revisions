@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 module CompareRevisions.Git
   ( URL(..)
+  , toText
   , Branch(..)
   , RevSpec(..)
   , Revision(..)

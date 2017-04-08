@@ -14,11 +14,13 @@ module CompareRevisions.Config
   -- * Command line
   , AppConfig(..)
   , flags
+  , getRepoPath
   ) where
 
 import Protolude hiding (Identity)
 
 import Control.Monad.Fail (fail)
+import Crypto.Hash (hash, Digest, SHA256)
 import Data.Aeson
   ( FromJSON(..)
   , ToJSON(..)
@@ -30,7 +32,9 @@ import Data.Aeson
   )
 import Data.Aeson.Types (Options(..), SumEncoding(..), camelTo2, typeMismatch)
 import qualified Data.Char as Char
+import qualified Data.Text as Text
 import Options.Applicative (Parser, help, long, option, str)
+import System.FilePath ((</>))
 
 import CompareRevisions.Duration (Duration)
 import qualified CompareRevisions.Git as Git
@@ -41,6 +45,20 @@ data AppConfig = AppConfig
   { configFile :: FilePath
   , gitRepoDir :: FilePath
   } deriving (Eq, Show)
+
+-- | Where should we store the given Git repository?
+--
+-- Each repository is stored in a directory underneath the configured
+-- 'gitRepoDir'. The name of the directory is the SHA256 of the URL, followed
+-- by the URL.
+getRepoPath :: FilePath -> Git.URL -> FilePath
+getRepoPath gitRepoDir url =
+  gitRepoDir </> "repos" </> subdir
+  where
+    subdir = prefix <> "-" <> suffix
+    prefix = show (hash (toS urlText :: ByteString) :: Digest SHA256)
+    suffix = toS (snd (Text.breakOnEnd "/" urlText))
+    urlText = Git.toText url
 
 -- | Command-line flags for specifying the app's configuration.
 flags :: Parser AppConfig

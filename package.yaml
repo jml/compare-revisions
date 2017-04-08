@@ -25,6 +25,7 @@ library:
     - attoparsec
     - bytestring
     - containers
+    - cryptonite
     - directory
     - exceptions
     - filepath
