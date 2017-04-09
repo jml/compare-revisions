@@ -1,17 +1,31 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TypeApplications #-}
 -- | Regular expression substitution.
 --
 -- I can't believe I am writing this, but there isn't a substitution function
 -- for regular expressions in regex-tdfa:
 -- <https://github.com/ChrisKuklewicz/regex-tdfa/issues/4>
 module CompareRevisions.Regex
-  ( regexReplace
+  ( RegexReplace
+  , makeRegexReplace
+  , regexReplace
     -- * Exported for testing
   , compileReplacement
   ) where
 
 import Protolude
 
+import Control.Monad.Fail (fail)
+import Data.Aeson
+  ( FromJSON(..)
+  , ToJSON(..)
+  , Value(..)
+  , (.:)
+  , (.=)
+  , object
+  )
+import Data.Aeson.Types (typeMismatch)
 import Data.Array ((!), bounds)
 import Data.Attoparsec.ByteString.Char8
   ( Parser
@@ -24,16 +38,58 @@ import Data.Attoparsec.ByteString.Char8
   , takeWhile1
   )
 import qualified Data.ByteString as ByteString
-import Text.Regex.TDFA (MatchText, RegexLike, match)
+import Text.Regex.TDFA (MatchText, RegexLike, Regex, makeRegexM, match)
+import Text.Show (Show(..))
 
--- | Currently, replaces an *entire string* with the replacement, with the
--- placeholders filled by regex groups. Ought to instead only replace the
--- parts of the original string that match the regular expression.
-regexReplace :: (RegexLike t ByteString, HasCallStack, MonadPlus f) => t -> ByteString -> ByteString -> f ByteString
-regexReplace regex replacement input =
-  let reps = compileReplacement replacement
-      replace = replaceSubgroups reps
-  in replaceAll regex replace input
+-- | An opaque object representing a regular expression replacement /
+-- substitution. i.e. a regular expression with submatches and a string where
+-- those submatches are inserted.
+data RegexReplace
+  = RegexReplace
+  { regex :: Regex
+  , origRegex :: ByteString
+  , replacement :: [Either Int ByteString]
+  , origReplacement :: ByteString
+  }
+
+instance Eq RegexReplace where
+  x == y = origRegex x == origRegex y && origReplacement x == origReplacement y
+
+instance Ord RegexReplace where
+  x `compare` y = (origRegex x, origReplacement x) `compare` (origRegex y, origReplacement y)
+
+instance Show RegexReplace where
+  show x = "RegexReplace " <> Protolude.show (origRegex x) <> " " <> Protolude.show (origReplacement x)
+
+instance ToJSON RegexReplace where
+  toJSON RegexReplace{..} = object [ "match" .= toS @ByteString @Text origRegex
+                                   , "output" .= toS @ByteString @Text origReplacement
+                                   ]
+
+instance FromJSON RegexReplace where
+  parseJSON (Object v) = do
+    regex <- v .: "match"
+    replacement <- v .: "output"
+    case makeRegexReplace (toS regex) (toS (replacement :: Text)) of
+      Nothing -> fail $ "Invalid regular expression: " <> regex
+      Just re -> pure re
+  parseJSON x = typeMismatch "RegexReplace" x
+
+
+-- | Construct a 'RegexReplace', returning 'Nothing' if the regular expression
+-- is invalid.
+makeRegexReplace :: ByteString -> ByteString -> Maybe RegexReplace
+makeRegexReplace origRegex origReplacement = do
+  regex <- makeRegexM origRegex
+  let replacement = compileReplacement origReplacement
+  pure RegexReplace { regex = regex
+                    , origRegex = origRegex
+                    , replacement = replacement
+                    , origReplacement = origReplacement
+                    }
+
+regexReplace :: MonadPlus f => RegexReplace -> ByteString -> f ByteString
+regexReplace (RegexReplace regex _ replacement _) = replaceAll regex (replaceSubgroups replacement)
 
 
 -- | Find all the matches in a bytestring and replace them using the given
@@ -51,6 +107,8 @@ replaceAll regex f input = start end
       let (offset, len) = snd (matchText ! 0)
           (skip, start') = ByteString.splitAt (offset - index) read
           (_, remaining) = ByteString.splitAt len start'
+          -- TODO: Can probably write this applicatively, reducing the
+          -- constraint from MonadPlus to Alternative
           writer x = do
             replacement <- f matchText
             write (skip <> replacement <> x)
@@ -81,7 +139,7 @@ compileReplacement replacement =
     -- As best as I can tell, this parser should match *all* bytestrings.
     -- Thus, it's a programming error if it cannot, and panicking is
     -- acceptable. -- jml
-    Left err -> panic $ "Error parsing " <> show replacement <> ": " <> toS err
+    Left err -> panic $ "Error parsing " <> Protolude.show replacement <> ": " <> toS err
     Right result -> result
   where
     parser = many ((Left <$> placeholder) <|> (Right <$> (escapedChar <|> notPlaceholder' <|> backslash)))

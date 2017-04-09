@@ -38,6 +38,7 @@ import System.FilePath ((</>))
 
 import CompareRevisions.Duration (Duration)
 import qualified CompareRevisions.Git as Git
+import CompareRevisions.Regex (RegexReplace)
 
 
 -- | Configuration specific to compare-revisions.
@@ -145,10 +146,7 @@ instance FromJSON policy => FromJSON (ImageConfig policy) where
   parseJSON = genericParseJSON imageConfigOptions
 
 data PolicyConfig
-  = Regex
-  { match :: Text  -- XXX: Probably a different type
-  , output :: Text  -- XXX: Probably a different type
-  }
+  = Regex RegexReplace
   | Identity
   deriving (Eq, Ord, Show, Generic)
 
@@ -166,7 +164,7 @@ instance FromJSON PolicyConfig where
     typ <- v .: "type"
     case typ of
       String "identity" -> pure Identity
-      String "regex" -> Regex <$> v .: "match" <*> v .: "output"
+      String "regex" -> Regex <$> parseJSON (Object v)
       String x -> fail $ "Unrecognized policy type: " <> toS x
       x -> typeMismatch "Policy type name" x
   parseJSON x = typeMismatch "Policy config" x

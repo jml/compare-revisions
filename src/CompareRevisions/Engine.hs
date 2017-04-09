@@ -20,7 +20,6 @@ import qualified Prometheus as Prom
 import System.Directory (canonicalizePath)
 import System.FilePath ((</>), takeDirectory)
 import System.FSNotify (Event(..), StopListening, WatchManager, eventPath, watchDir)
-import Text.Regex.TDFA (Regex, makeRegexM)
 
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Git as Git
@@ -119,12 +118,7 @@ compareRevisions rootDirectory labelPolicy repoURL startLabel endLabel = do
 
 getRevision :: Config.PolicyConfig -> Kube.ImageLabel -> Maybe Git.RevSpec
 getRevision Config.Identity label = pure . Git.RevSpec $ label
-getRevision Config.Regex{..} label = do
-  let regex = makeRegexM (toS match :: ByteString) :: Maybe Regex
-  case regex of
-    Nothing -> Nothing
-    Just re -> Git.RevSpec . toS <$> regexReplace re (toS output) (toS label)
-
+getRevision (Config.Regex regex) label = Git.RevSpec . toS <$> regexReplace regex (toS label)
 
 -- | Configuration we need to compare a cluster.
 data ValidConfig

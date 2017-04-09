@@ -2,6 +2,7 @@
 module Config (tests) where
 
 import Protolude
+import Data.Maybe (fromJust)
 import qualified Data.Text as Text
 import qualified Data.Yaml as Yaml
 import Test.Tasty (TestTree)
@@ -10,6 +11,7 @@ import Test.Tasty.Hspec (testSpec, describe, it, shouldBe)
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Duration as Duration
 import qualified CompareRevisions.Git as Git
+import qualified CompareRevisions.Regex as Regex
 import CompareRevisions.SCP (SCP(..))
 
 tests :: IO TestTree
@@ -25,7 +27,7 @@ tests = testSpec "Config" $ do
             , "match: ^master-([0-9a-f]+)$"
             , "output: \\1"
             ]
-      let expected = Config.Regex { match = "^master-([0-9a-f]+)$", output = "\\1" }
+      let Just expected = Regex.makeRegexReplace "^master-([0-9a-f]+)$" "\\1"
       Yaml.decodeEither (toS example) `shouldBe` Right expected
 
 readmeExample :: Text
@@ -74,8 +76,5 @@ parsedReadmeExample =
                                      , imageToRevisionPolicy = "weaveworks"
                                      })
              ]
-    policies = [ ("weaveworks", Config.Regex
-                                { match = "^master-([0-9a-f]+)$"
-                                , output = "\\1"
-                                })
+    policies = [ ("weaveworks", Config.Regex (fromJust (Regex.makeRegexReplace "^master-([0-9a-f]+)$" "\\1")))
                ]
