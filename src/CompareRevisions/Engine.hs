@@ -104,14 +104,14 @@ compareImages rootDirectory configRepoURL branch src tgt = do
 
 compareRevisions
   :: (MonadIO m, MonadError Git.GitError m)
-  => Config.PolicyConfig
+  => FilePath
+  -> Config.PolicyConfig
   -> Git.URL
-  -> FilePath
   -> Kube.ImageLabel
   -> Kube.ImageLabel
   -> m (Maybe [Git.Revision])
-compareRevisions labelPolicy repoURL repoPath startLabel endLabel = do
-  Git.syncRepo repoURL repoPath
+compareRevisions rootDirectory labelPolicy repoURL startLabel endLabel = do
+  repoPath <- syncRepo rootDirectory repoURL
   let startRev = getRevision labelPolicy startLabel
   let endRev = getRevision labelPolicy endLabel
   sequenceA (Git.getLog repoPath <$> startRev <*> endRev)
