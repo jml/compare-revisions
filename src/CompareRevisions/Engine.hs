@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 module CompareRevisions.Engine
   ( ValidConfig(..)
+  , Error(..)
   , compareImages
   , compareRevisions
   , loadConfigFile
@@ -12,6 +13,7 @@ import Protolude
 
 import Control.Concurrent.STM (TVar, readTVar, writeTVar)
 import qualified Control.Logging as Log
+import Control.Monad.Except (withExceptT)
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.Map as Map
 import Data.String (String)
@@ -25,7 +27,7 @@ import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Git as Git
 import qualified CompareRevisions.Kube as Kube
 import CompareRevisions.Kube (KubeObject(..), ImageDiff(..))
-import CompareRevisions.Regex (regexReplace)
+import CompareRevisions.Regex (RegexReplace, regexReplace)
 import CompareRevisions.Validator (Validator, runValidator, throwE)
 
 -- | Metrics used in reporting application.
@@ -49,6 +51,8 @@ _initMetrics = Metrics
 data Error
   = ParseError ParseException
   | InvalidConfig (NonEmpty ConfigError)
+  | RegexError RegexReplace Text
+  | GitError Git.GitError
   deriving (Show)
 
 
@@ -100,25 +104,23 @@ compareImages rootDirectory configRepoURL branch src tgt = do
     checkoutPath = rootDirectory </> "config-repo"
     loadEnv env = Kube.loadEnvFromDisk (checkoutPath </> Config.path env)
 
-
 compareRevisions
-  :: (MonadIO m, MonadError Git.GitError m)
+  :: (MonadIO m)
   => FilePath
   -> Config.PolicyConfig
   -> Git.URL
   -> Kube.ImageLabel
   -> Kube.ImageLabel
-  -> m (Maybe [Git.Revision])
+  -> ExceptT Error m [Git.Revision]
 compareRevisions rootDirectory labelPolicy repoURL startLabel endLabel = do
-  repoPath <- syncRepo rootDirectory repoURL
-  let startRev = getRevision labelPolicy startLabel
-  let endRev = getRevision labelPolicy endLabel
-  sequenceA (Git.getLog repoPath <$> startRev <*> endRev)
+  repoPath <- withExceptT GitError $ syncRepo rootDirectory repoURL
+  startRev <- getRevision labelPolicy startLabel
+  endRev <- getRevision labelPolicy endLabel
+  withExceptT GitError $ Git.getLog repoPath startRev endRev
 
-
-getRevision :: Config.PolicyConfig -> Kube.ImageLabel -> Maybe Git.RevSpec
+getRevision :: MonadError Error m => Config.PolicyConfig -> Kube.ImageLabel -> m Git.RevSpec
 getRevision Config.Identity label = pure . Git.RevSpec $ label
-getRevision (Config.Regex regex) label = Git.RevSpec . toS <$> regexReplace regex (toS label)
+getRevision (Config.Regex regex) label = Git.RevSpec . toS <$> note (RegexError regex label) (regexReplace regex (toS label))
 
 -- | Configuration we need to compare a cluster.
 data ValidConfig

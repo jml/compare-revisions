@@ -13,6 +13,7 @@ module CompareRevisions.API
 
 import Protolude
 
+import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
 import Data.Aeson (ToJSON(..))
 import qualified Data.Map as Map
@@ -29,7 +30,7 @@ import qualified CompareRevisions.Kube as Kube
 -- | compare-revisions API definition.
 type API
   = "images" :> Get '[HTML, JSON] ImageDiffs
-  :<|> "revisions" :> Get '[HTML, JSON] Revisions
+  :<|> "revisions" :> Get '[HTML] Revisions
   :<|> Get '[HTML] RootPage
 
 -- TODO: Also want to show:
@@ -108,13 +109,7 @@ instance L.ToHtml ImageDiffs where
       labelCell = L.td_ . L.toHtml . fromMaybe "<no label>"
 
 
-newtype Revisions = Revisions (Map Kube.ImageName (Maybe [Git.Revision])) deriving (Eq, Ord, Show)
-
-instance ToJSON Revisions where
-  toJSON (Revisions byImage) = toJSON (map revsToJSON byImage)
-    where
-      revsToJSON revs = map revToJSON <$> revs
-      revToJSON (Git.Revision revText) = revText
+newtype Revisions = Revisions (Map Kube.ImageName (Maybe (Either Engine.Error [Git.Revision]))) deriving (Show)
 
 instance L.ToHtml Revisions where
   toHtmlRaw = L.toHtml
@@ -131,8 +126,11 @@ instance L.ToHtml Revisions where
 
       renderImage (name, Nothing) =
         (L.h2_ (L.toHtml name)) <>
-        (L.p_ (L.toHtml ("No revisions found (because of any number of reasons)" :: Text)))
-      renderImage (name, (Just revs)) =
+        (L.p_ (L.toHtml ("No repository configured for image" :: Text)))
+      renderImage (name, (Just (Left err))) =
+        (L.h2_ (L.toHtml name)) <>
+        (L.pre_ $ (L.toHtml (show err :: Text)))
+      renderImage (name, (Just (Right revs))) =
         (L.h2_ (L.toHtml name)) <>
         (L.ul_ $ foldMap renderRevision revs)
 
@@ -175,10 +173,14 @@ revisions appConfig = do
   case result of
     Left err -> throwError (to500 err)
     Right config -> do
+      liftIO $ Log.debug ("Parsed config: " <> show config)
       let configRepo = Engine.configRepo config
       let gitURL = Config.url configRepo
       let srcEnv = Config.sourceEnv configRepo
       let tgtEnv = Config.targetEnv configRepo
+      -- TODO: currently using src image as start and tgt image as end of
+      -- revision range. This is wrong because source is nomally *ahead* of
+      -- target. Swap them around while preserving good variable names.
       let branch = fromMaybe (Git.Branch "master") (Config.branch configRepo)
       diff <- withExceptT to500 $ Engine.compareImages (Config.gitRepoDir appConfig) gitURL branch srcEnv tgtEnv
       let changedImages = getChangedImages diff
@@ -194,5 +196,6 @@ revisions appConfig = do
     getRevisions config name (start, end) =
       case Map.lookup name (Engine.images config) of
         Nothing -> pure Nothing
-        Just Config.ImageConfig{..} ->
-          withExceptT to500 $ Engine.compareRevisions (Config.gitRepoDir appConfig) imageToRevisionPolicy gitURL start end 
+        Just Config.ImageConfig{..} -> do
+          result <- liftIO $ runExceptT $ Engine.compareRevisions (Config.gitRepoDir appConfig) imageToRevisionPolicy gitURL start end
+          pure (Just result)
