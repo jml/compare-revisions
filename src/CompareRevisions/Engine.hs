@@ -112,10 +112,10 @@ compareRevisions
   -> Kube.ImageLabel
   -> Kube.ImageLabel
   -> ExceptT Error m [Git.Revision]
-compareRevisions rootDirectory labelPolicy repoURL startLabel endLabel = do
+compareRevisions rootDirectory labelPolicy repoURL srcLabel tgtLabel = do
   repoPath <- withExceptT GitError $ syncRepo rootDirectory repoURL
-  startRev <- getRevision labelPolicy startLabel
-  endRev <- getRevision labelPolicy endLabel
+  endRev <- getRevision labelPolicy srcLabel
+  startRev <- getRevision labelPolicy tgtLabel
   withExceptT GitError $ Git.getLog repoPath startRev endRev
 
 getRevision :: MonadError Error m => Config.PolicyConfig -> Kube.ImageLabel -> m Git.RevSpec

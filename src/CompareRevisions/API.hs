@@ -134,7 +134,7 @@ instance L.ToHtml Revisions where
         (L.h2_ (L.toHtml name)) <>
         (L.ul_ $ foldMap renderRevision revs)
 
-      renderRevision (Git.Revision text) = L.li_ (L.toHtml text)
+      renderRevision (Git.Revision text) = L.li_ (L.pre_ (L.toHtml text))
 
 
 -- | compare-revisions API implementation.
@@ -191,7 +191,7 @@ revisions appConfig = do
 
     -- XXX: Silently ignoring things that don't have start or end labels, as
     -- well as images that are only deployed on one environment.
-    getChangedImages diff = Map.fromList [ (name, (start, end)) | Kube.ImageChanged name (Just start) (Just end) <- foldMap identity diff ]
+    getChangedImages diff = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- foldMap identity diff ]
 
     getRevisions config name (start, end) =
       case Map.lookup name (Engine.images config) of

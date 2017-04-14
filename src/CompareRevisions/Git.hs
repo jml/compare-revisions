@@ -186,8 +186,9 @@ ensureCheckout repoPath branch workTreePath = do
 
 getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> m [Revision]
 getLog repoPath (RevSpec start) (RevSpec end) = do
-  -- XXX: This is a crappy way of generating parseable revisions.
-  (out, _) <- runGitInRepo repoPath ["log", "--format='%h::%an::%s'", range]
+  -- TODO: Format as something mildly parseable (e.g. "--format=%h::%an::%s")
+  -- and parse it.
+  (out, _) <- runGitInRepo repoPath ["log", "--first-parent", "--oneline", range]
   pure (map Revision (Text.lines out))
   where
     range = start <> ".." <> end
