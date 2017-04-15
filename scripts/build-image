@@ -38,6 +38,7 @@ image_tag="${4}"
 exe_name=$(basename "${binary_path}")
 
 # Run a container for the build image so we can copy things into and out of it.
+# XXX: Use --rm?
 build_container=$(docker run -d "${build_image}" tail -f /dev/null)
 trap 'docker stop "${build_container}" >/dev/null && docker rm "${build_container}"' EXIT
 

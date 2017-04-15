@@ -1,6 +1,6 @@
 .PHONY: check clean docs format image lint
 
-BUILD_IMAGE = fpco/stack-build:lts-7.14
+BUILD_IMAGE = fpco/stack-build:lts-8.6
 IMAGE_NAME := compare-revisions
 IMAGE_TAG := $(shell ./scripts/image-tag)
 EXE_NAME := compare-revisions
@@ -18,12 +18,13 @@ clean:
 docs:
 	stack haddock
 
-format:
-	./scripts/hindent-everything
-
 lint:
 	hlint -q .
 
+# XXX: This didn't work until I did a manual `docker pull fpco/stack-build:lts-8.6`
+# XXX: The stack-build image is also way too big
+# XXX: Building all the dependencies takes way too long--can we cache deps somehow as a build image?
+# XXX: 'image' is phony, and will build even if everything is up-to-date
 image:
 	stack --docker build
 	./scripts/build-image \
