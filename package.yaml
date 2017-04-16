@@ -60,13 +60,13 @@ executables:
   compare-revisions:
     main: Main.hs
     ghc-options: -threaded
-    source-dirs: cmd
+    source-dirs: cmd/compare-revisions
     dependencies:
       - compare-revisions
 
   compare-images:
-    main: CompareImages.hs
-    source-dirs: cmd
+    main: Main.hs
+    source-dirs: cmd/compare-images
     dependencies:
       - compare-revisions
       - containers
@@ -74,7 +74,7 @@ executables:
 
 tests:
   tasty:
-    main: Main.hs
+    main: Tasty.hs
     source-dirs: tests
     dependencies:
       - compare-revisions
