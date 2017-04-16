@@ -3,17 +3,22 @@
 
 # Boiler plate for bulding Docker containers.
 # All this must go at top of file I'm afraid.
-IMAGE_PREFIX := quay.io/weaveworks/
+IMAGE_PREFIX := quay.io/weaveworks
 IMAGE_TAG := $(shell ./tools/image-tag)
 UPTODATE := .uptodate
 
-# Building Docker images is now automated. The convention is every directory
-# with a Dockerfile in it builds an image calls quay.io/weaveworks/<dirname>.
-# Dependencies (i.e. things that go in the image) still need to be explicitly
-# declared.
 %/$(UPTODATE): %/Dockerfile
-	$(SUDO) docker build -t $(IMAGE_PREFIX)$(shell basename $(@D)) $(@D)/
-	$(SUDO) docker tag $(IMAGE_PREFIX)$(shell basename $(@D)) $(IMAGE_PREFIX)$(shell basename $(@D)):$(IMAGE_TAG)
+	mkdir -p $(@D)/.output
+	cp $(@D)/Dockerfile $(@D)/.output/
+	$(SUDO) docker run $(RM) -ti \
+		-v $(shell pwd):$(shell pwd) \
+		--entrypoint=/usr/local/bin/copy-libraries \
+		quay.io/weaveworks/build-haskell:latest \
+		$(BINARY_DIR)/$(shell basename $(@D)) \
+		$(shell pwd)/$(@D)/.output
+	$(SUDO) docker build -t $(IMAGE_PREFIX)/$(shell basename $(@D)) $(@D)/.output
+	$(SUDO) docker tag $(IMAGE_PREFIX)/$(shell basename $(@D)) $(IMAGE_PREFIX)/$(shell basename $(@D)):$(IMAGE_TAG)
+	rm $(@D)/.output/Dockerfile
 	touch $@
 
 # Get a list of directories containing Dockerfiles
@@ -25,13 +30,14 @@ images:
 	$(info $(IMAGE_NAMES))
 	@echo > /dev/null
 
-# Building binaries is now automated.  The convention is to build a binary
-# for every directory with main.go in it, in the ./cmd directory.
+# stack builds all the binaries. This assumes the binaries are defined by
+# 'Main.hs' files in cmd/<executable-name>/Main.hs
+BINARY_DIR := $(shell pwd)/.output
 MAIN_HS := $(shell find . -name tools -prune -o -type f -name 'Main.hs' -print)
-EXES := $(foreach exe, $(patsubst ./cmd/%/Main.hs, %, $(MAIN_HS)), ./cmd/$(exe)/$(exe))
+EXES := $(foreach exe, $(patsubst ./cmd/%/Main.hs, %, $(MAIN_HS)), $(BINARY_DIR)/$(exe))
 HS_FILES := $(shell find . -name tools -prune -o -name cmd -prune -o -type f -name '*.hs' -print)
 define dep_exe
-$(1): $(dir $(1))/Main.hs $(HS_FILES)
+$(1): cmd/$(shell basename $(1))/Main.hs $(HS_FILES)
 $(dir $(1))$(UPTODATE): $(1)
 endef
 $(foreach exe, $(EXES), $(eval $(call dep_exe, $(exe))))
@@ -44,6 +50,9 @@ test:
 SUDO := $(shell docker info >/dev/null 2>&1 || echo "sudo -E")
 BUILD_IN_CONTAINER := true
 RM := --rm
+
+cmd/compare-revisions/$(UPTODATE): $(EXES)
+
 
 ifeq ($(BUILD_IN_CONTAINER),true)
 
@@ -62,13 +71,23 @@ $(EXES) lint test shell:
 else
 
 $(EXES):
-	stack --internal-re-exec-version=1.3.2 --internal-docker-entrypoint "DockerEntrypoint {deUser = Nothing}" --docker build
+	stack --internal-re-exec-version=1.3.2 \
+		--internal-docker-entrypoint "DockerEntrypoint {deUser = Nothing}" \
+		--docker \
+		--local-bin-path $(BINARY_DIR) \
+		--copy-bins \
+		build
 
 lint:
 	./tools/lint -notestpackage .
 
 test:
-	stack test
+	stack --internal-re-exec-version=1.3.2 \
+		--internal-docker-entrypoint "DockerEntrypoint {deUser = Nothing}" \
+		--docker \
+		--local-bin-path $(BINARY_DIR) \
+		--copy-bins \
+		test
 
 shell:
 	bash

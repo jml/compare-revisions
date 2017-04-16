@@ -1,4 +1,4 @@
 FROM       quay.io/prometheus/busybox:latest
-COPY       compare-revisions /bin/compare-revisions
+COPY       . /
 EXPOSE     80
-ENTRYPOINT [ "/bin/compare-revisions" ]
+ENTRYPOINT [ "/compare-revisions" ]
