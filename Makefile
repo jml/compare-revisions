@@ -3,7 +3,7 @@
 
 # Boiler plate for bulding Docker containers.
 # All this must go at top of file I'm afraid.
-IMAGE_PREFIX := quay.io/weaveworks
+IMAGE_PREFIX := quay.io/weaveworks/
 IMAGE_TAG := $(shell ./tools/image-tag)
 UPTODATE := .uptodate
 
@@ -16,8 +16,8 @@ UPTODATE := .uptodate
 		quay.io/weaveworks/build-haskell:latest \
 		$(BINARY_DIR)/$(shell basename $(@D)) \
 		$(shell pwd)/$(@D)/.output
-	$(SUDO) docker build -t $(IMAGE_PREFIX)/$(shell basename $(@D)) $(@D)/.output
-	$(SUDO) docker tag $(IMAGE_PREFIX)/$(shell basename $(@D)) $(IMAGE_PREFIX)/$(shell basename $(@D)):$(IMAGE_TAG)
+	$(SUDO) docker build -t $(IMAGE_PREFIX)$(shell basename $(@D)) $(@D)/.output
+	$(SUDO) docker tag $(IMAGE_PREFIX)$(shell basename $(@D)) $(IMAGE_PREFIX)$(shell basename $(@D)):$(IMAGE_TAG)
 	rm $(@D)/.output/Dockerfile
 	touch $@
 
