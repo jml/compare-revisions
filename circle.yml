@@ -6,7 +6,8 @@ dependencies:
   cache_directories:
     - "~/docker"
   override:
-
+    # Don't want to run Haskell stuff
+    - touch .irrelevant
 
 test:
   override:
