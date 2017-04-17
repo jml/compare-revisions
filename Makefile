@@ -57,6 +57,7 @@ cmd/compare-revisions/$(UPTODATE): $(EXES)
 ifeq ($(BUILD_IN_CONTAINER),true)
 
 $(EXES) lint test shell:
+	mkdir -p $(BINARY_DIR)
 	$(SUDO) time docker run $(RM) -ti \
 		-e SRC_PATH=$(shell pwd) \
 		-e STACK_IN_CONTAINER=1 \
@@ -85,8 +86,6 @@ test:
 	stack --internal-re-exec-version=1.3.2 \
 		--internal-docker-entrypoint "DockerEntrypoint {deUser = Nothing}" \
 		--docker \
-		--local-bin-path $(BINARY_DIR) \
-		--copy-bins \
 		test
 
 shell:

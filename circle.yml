@@ -5,6 +5,8 @@ machine:
 dependencies:
   cache_directories:
     - "~/docker"
+    - "~/.stack"
+    - "~/compare-revisions/.stack-work"
   override:
     # Don't want to run Haskell stuff
     - touch .irrelevant
