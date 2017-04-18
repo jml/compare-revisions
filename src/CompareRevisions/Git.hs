@@ -99,7 +99,9 @@ syncRepo url repoPath = do
   if repoExists
     then do
       Log.debug' "Update existing repo"
-      -- TODO: Wrongly assumes 'origin' is the same
+      -- TODO: Wrongly assumes 'origin' is the same, i.e. that URL doesn't
+      -- change. We work around this by using 'getRepoPath' to provide the
+      -- path, which includes a hash of the URL.
       fetchRepo repoPath
     else do
       Log.debug' "Downloading new repo"
@@ -190,8 +192,6 @@ ensureCheckout repoPath branch workTreePath = do
 
 getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> Maybe [FilePath] -> m [Revision]
 getLog repoPath (RevSpec start) (RevSpec end) paths = do
-  -- TODO: Format as something mildly parseable (e.g.
-  -- ) and parse it.
   let command = ["log", "--first-parent", "--format=%h::%cd::%an::%s",  "--date=iso", range]
   let withFilter = command <> case paths of
                                 Nothing -> []

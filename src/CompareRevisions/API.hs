@@ -93,7 +93,7 @@ instance L.ToHtml ImageDiffs where
           L.tr_ $ do
             L.th_ "Image"
             L.th_ "dev"
-            L.th_ "prod" -- TODO: Read this from the data structure
+            L.th_ "prod" -- TODO: Read the environment names from the data structure, rather than hardcoding
           rows
     where
       title = "compare-images"
@@ -175,10 +175,6 @@ images appConfig = do
 -- TODO: Do this work elsewhere. Have the handler read from a variable that
 -- has all the data already there.
 
--- TODO: Lots of "Maybe" and "Alternate" on this whole path. Would probably be
--- good to have specific errors and bubble at least some of them up to the end
--- user.
-
 -- | Show the revisions that are in one environment but not others.
 revisions :: Config.AppConfig -> Handler Revisions
 revisions appConfig = do
@@ -191,13 +187,13 @@ revisions appConfig = do
       let gitURL = Config.url configRepo
       let srcEnv = Config.sourceEnv configRepo
       let tgtEnv = Config.targetEnv configRepo
-      -- TODO: currently using src image as start and tgt image as end of
-      -- revision range. This is wrong because source is nomally *ahead* of
-      -- target. Swap them around while preserving good variable names.
       let branch = fromMaybe (Git.Branch "master") (Config.branch configRepo)
       diff <- withExceptT to500 $ Engine.compareImages (Config.gitRepoDir appConfig) gitURL branch srcEnv tgtEnv
       let changedImages = getChangedImages diff
-      -- TODO: Do this in parallel
+      -- TODO: Calculate revision logs in parallel
+
+      -- TODO: Current approach means that we re-fetch repositories that build
+      -- to multiple images. This is wasted effort.
       Revisions <$> Map.traverseWithKey (getRevisions config) changedImages
   where
     to500 err = err500 { errBody = show err}
