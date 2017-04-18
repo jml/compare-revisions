@@ -134,6 +134,7 @@ data ImageConfig policy
   = ImageConfig
   { gitURL :: Git.URL
   , imageToRevisionPolicy :: policy
+  , paths :: Maybe [FilePath]
   } deriving (Eq, Ord, Show, Generic)
 
 imageConfigOptions :: Options

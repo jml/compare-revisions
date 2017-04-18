@@ -17,9 +17,12 @@ This configuration will pull from a configuration repository on Github
 (`my-org/service-config`) every minute and compare the images found under the
 `k8s/dev` path to the corresponding images in the `k8s/prod` path.
 
-When it finds `weaveworks/cortex` images, it will apply a regular expression
-to extract the revision from the image tag, assuming that the metric tag is of
-the form `master-1ab2c3d`.
+When it finds `weaveworks/cortex-distributor` images, it will apply a regular
+expression to extract the revision from the image tag, assuming that the
+metric tag is of the form `master-1ab2c3d`.
+
+It will then display the top-level (i.e. `--first-parent`) revisions from the
+Git log, including only those revisions that touch the given paths.
 
 ```yaml
 config-repo:
@@ -33,9 +36,14 @@ config-repo:
     path: k8s/prod
 
 images:
-  weaveworks/cortex:
+  weaveworks/cortex-distributor:
     git-url: git@github.com:weaveworks/cortex.git
     image-to-revision-policy: weaveworks
+    paths:
+      - cmd/distributor
+      - distributor
+      - ring
+      - util
 
 revision-policies:
   weaveworks:
@@ -50,7 +58,7 @@ revision-policies:
 
 Build and install the code with `stack install` and then run with:
 
-    compare-revisions --port 8080
+    compare-revisions --port 8080 --config-file config.yaml --git-repo-dir /var/run/compare-revisions
 
 This will start a server that you can reach at http://localhost:8080/
 
@@ -58,14 +66,18 @@ This will start a server that you can reach at http://localhost:8080/
 
 Create a Docker image with:
 
-    make image
+    make
 
 The last line of successful `make` output will be the name of the image, e.g.
 `compare-revisions:master-1a2b3cd`.
 
 You can then run the image like so:
 
-    docker run -p 8080:80 compare-revisions:master-1a2b3cd --port 80
+    docker run -ti -p 8080:80 -v /path/to/config:/data \
+        compare-revisions:master-1a2b3cd \
+          --port 80 \
+          --config-file \
+          /data/config.yaml
 
 And you can reach the server at http://localhost:8080/ if you are running
 Docker natively. If you're on a Mac and

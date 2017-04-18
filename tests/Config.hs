@@ -74,6 +74,7 @@ parsedReadmeExample =
     images = [ ("weaveworks/cortex", Config.ImageConfig
                                      { gitURL = Git.SCP (AuthRemoteFile "git" "github.com" "weaveworks/cortex.git")
                                      , imageToRevisionPolicy = "weaveworks"
+                                     , paths = Nothing
                                      })
              ]
     policies = [ ("weaveworks", Config.Regex (fromJust (Regex.makeRegexReplace "^master-([0-9a-f]+)$" "\\1")))

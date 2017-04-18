@@ -1,3 +1,4 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 module CompareRevisions.Engine
   ( ValidConfig(..)
@@ -102,21 +103,23 @@ compareImages rootDirectory configRepoURL branch src tgt = do
   Kube.getDifferingImages <$> loadEnv src <*> loadEnv tgt
   where
     checkoutPath = rootDirectory </> "config-repo"
-    loadEnv env = Kube.loadEnvFromDisk (checkoutPath </> Config.path env)
+    loadEnv env = Kube.loadEnvFromDisk (checkoutPath </> Config.path (env :: Config.Environment))
 
 compareRevisions
   :: (MonadIO m)
-  => FilePath
-  -> Config.PolicyConfig
-  -> Git.URL
-  -> Kube.ImageLabel
-  -> Kube.ImageLabel
+  => FilePath -- ^ Root directory for compare-revisions. Where we store downloaded repositories.
+  -> Config.PolicyConfig -- ^ How to interpret image labels
+  -> Git.URL -- ^ Where the code for the image can be found
+  -> Kube.ImageLabel -- ^ The image label in the source environment
+  -> Kube.ImageLabel -- ^ The image label in the target environment
+  -> Maybe [FilePath]  -- ^ Optional paths to filter logs by
   -> ExceptT Error m [Git.Revision]
-compareRevisions rootDirectory labelPolicy repoURL srcLabel tgtLabel = do
+compareRevisions rootDirectory labelPolicy repoURL srcLabel tgtLabel paths = do
   repoPath <- withExceptT GitError $ syncRepo rootDirectory repoURL
+  -- TODO: Express this applicatively.
   endRev <- getRevision labelPolicy srcLabel
   startRev <- getRevision labelPolicy tgtLabel
-  withExceptT GitError $ Git.getLog repoPath startRev endRev
+  withExceptT GitError $ Git.getLog repoPath startRev endRev paths
 
 getRevision :: MonadError Error m => Config.PolicyConfig -> Kube.ImageLabel -> m Git.RevSpec
 getRevision Config.Identity label = pure . Git.RevSpec $ label

@@ -184,11 +184,15 @@ ensureCheckout repoPath branch workTreePath = do
       result <- tryJust (guard . isDoesNotExistError) (readSymbolicLink path)
       pure $ hush result
 
-getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> m [Revision]
-getLog repoPath (RevSpec start) (RevSpec end) = do
-  -- TODO: Format as something mildly parseable (e.g. "--format=%h::%an::%s")
-  -- and parse it.
-  (out, _) <- runGitInRepo repoPath ["log", "--first-parent", "--oneline", range]
+getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> Maybe [FilePath] -> m [Revision]
+getLog repoPath (RevSpec start) (RevSpec end) paths = do
+  -- TODO: Format as something mildly parseable (e.g.
+  -- "--format=%h::%ad::%an::%s --date=iso") and parse it.
+  let command = ["log", "--first-parent", "--oneline", range]
+  let withFilter = command <> case paths of
+                                Nothing -> []
+                                Just ps -> ["--"] <> map toS ps
+  (out, _) <- runGitInRepo repoPath withFilter
   pure (map Revision (Text.lines out))
   where
     range = start <> ".." <> end

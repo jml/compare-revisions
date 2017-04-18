@@ -197,5 +197,5 @@ revisions appConfig = do
       case Map.lookup name (Engine.images config) of
         Nothing -> pure Nothing
         Just Config.ImageConfig{..} -> do
-          result <- liftIO $ runExceptT $ Engine.compareRevisions (Config.gitRepoDir appConfig) imageToRevisionPolicy gitURL start end
+          result <- liftIO $ runExceptT $ Engine.compareRevisions (Config.gitRepoDir appConfig) imageToRevisionPolicy gitURL start end paths
           pure (Just result)
