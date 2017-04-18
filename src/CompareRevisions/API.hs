@@ -124,17 +124,30 @@ instance L.ToHtml Revisions where
 
       byImage = foldMap renderImage (Map.toAscList logs)
 
-      renderImage (name, Nothing) =
-        (L.h2_ (L.toHtml name)) <>
-        (L.p_ (L.toHtml ("No repository configured for image" :: Text)))
-      renderImage (name, (Just (Left err))) =
-        (L.h2_ (L.toHtml name)) <>
-        (L.pre_ $ (L.toHtml (show err :: Text)))
-      renderImage (name, (Just (Right revs))) =
-        (L.h2_ (L.toHtml name)) <>
-        (L.ul_ $ foldMap renderRevision revs)
+      renderImage (name, revs) =
+        L.h2_ (L.toHtml name) <> renderLogs revs
 
-      renderRevision (Git.Revision text) = L.li_ (L.pre_ (L.toHtml text))
+      renderLogs Nothing =
+        L.p_ (L.toHtml ("No repository configured for image" :: Text))
+      renderLogs (Just (Left err)) =
+        L.pre_ (L.toHtml (show err :: Text))
+      renderLogs (Just (Right [])) =
+        L.p_ (L.toHtml ("No revisions in range" :: Text))
+      renderLogs (Just (Right revs)) =
+        L.table_ $ do
+          L.tr_ $ do
+            L.th_ "SHA-1"
+            L.th_ "Date"
+            L.th_ "Author"
+            L.th_ "Subject"
+          foldMap renderRevision revs
+
+      renderRevision Git.Revision{..} =
+        L.tr_ $
+          L.td_ (L.toHtml abbrevHash) <>
+          L.td_ (L.toHtml commitDate) <>
+          L.td_ (L.toHtml authorName) <>
+          L.td_ (L.toHtml subject)
 
 
 -- | compare-revisions API implementation.

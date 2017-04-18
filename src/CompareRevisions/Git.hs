@@ -67,10 +67,13 @@ newtype Hash = Hash Text deriving (Eq, Ord, Show, Generic, FromJSON)
 newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show, Generic, FromJSON)
 
 -- | A Git revision.
---
--- Should actually contain structured data, but for now we'll just have the
--- direct output of @git log@.
-newtype Revision = Revision Text deriving (Eq, Ord, Show)
+data Revision
+  = Revision
+  { abbrevHash :: Text  -- TODO: Hash
+  , commitDate :: Text  -- TODO: some sort of data type
+  , authorName :: Text
+  , subject :: Text
+  } deriving (Eq, Ord, Show)
 
 -- XXX: Not sure this is a good idea. Maybe use exceptions all the way
 -- through?
@@ -78,6 +81,7 @@ newtype Revision = Revision Text deriving (Eq, Ord, Show)
 data GitError
   -- | An error occurred running the 'git' subprocess.
   = GitProcessError Text Int Text Text (Maybe FilePath)
+  | InvalidRevision Text
   deriving (Eq, Show)
 
 -- | Sync a repository.
@@ -187,15 +191,20 @@ ensureCheckout repoPath branch workTreePath = do
 getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> Maybe [FilePath] -> m [Revision]
 getLog repoPath (RevSpec start) (RevSpec end) paths = do
   -- TODO: Format as something mildly parseable (e.g.
-  -- "--format=%h::%ad::%an::%s --date=iso") and parse it.
-  let command = ["log", "--first-parent", "--oneline", range]
+  -- ) and parse it.
+  let command = ["log", "--first-parent", "--format=%h::%cd::%an::%s",  "--date=iso", range]
   let withFilter = command <> case paths of
                                 Nothing -> []
                                 Just ps -> ["--"] <> map toS ps
   (out, _) <- runGitInRepo repoPath withFilter
-  pure (map Revision (Text.lines out))
+  -- XXX: This will bork on the first invalid line. We can do better.
+  traverse parseRevision (Text.lines out)
   where
     range = start <> ".." <> end
+    parseRevision line =
+      case Text.splitOn "::" (Text.strip line) of
+        [hash, date, name, subject] -> pure (Revision hash date name subject)
+        _ -> throwError (InvalidRevision line)
 
 -- | Run 'git' in a repository.
 runGitInRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> [Text] -> m (Text, Text)
