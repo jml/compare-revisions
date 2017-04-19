@@ -5,11 +5,19 @@ module CompareRevisions.Server.Logging
   ( LogLevel(..)
   , flags
   , withLogging
+  , error'
   ) where
 
 import Protolude
 
-import Control.Logging (LogLevel(..), setLogLevel, setLogTimeFormat, withStdoutLogging)
+import Control.Logging
+  ( LogLevel(..)
+  , flushLog
+  , loggingLogger
+  , setLogLevel
+  , setLogTimeFormat
+  , withStdoutLogging
+  )
 import Options.Applicative
        (Parser, eitherReader, help, long, option, value)
 
@@ -25,6 +33,11 @@ flags =
     , value LevelInfo
     ])
 
+-- | Log a message at error level, flushing afterward.
+error' :: MonadIO io => Text -> io ()
+error' message = liftIO $ do
+  loggingLogger LevelError message ("" :: Text)
+  flushLog
 
 -- | Run an action with logging at the given level.
 withLogging :: LogLevel -> IO () -> IO ()

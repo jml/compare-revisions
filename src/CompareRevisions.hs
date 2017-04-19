@@ -5,12 +5,14 @@ module CompareRevisions
 
 import Protolude
 
+import qualified Control.Logging as Log
 import Options.Applicative (ParserInfo, execParser, fullDesc, header, helper, info, progDesc)
 import Servant (serve)
 
 import qualified CompareRevisions.API as API
 
 import qualified CompareRevisions.Config as Config
+import qualified CompareRevisions.Engine as Engine
 import qualified CompareRevisions.Server as Server
 import qualified CompareRevisions.Server.Logging as Log
 
@@ -35,5 +37,18 @@ startApp :: IO ()
 startApp = do
   Config appConfig serverConfig logLevel <- execParser options
   Log.withLogging logLevel $ do
-    let app = serve API.api (API.server appConfig)
-    Server.run serverConfig app
+    result <- runExceptT $ Engine.newClusterDiffer appConfig
+    case result of
+      Left err -> do
+        print err
+        exitWith (ExitFailure 1)
+      Right clusterDiffer -> do
+        let runWebServer = Server.run serverConfig (serve API.api (API.server clusterDiffer))
+        result' <- withAsync runWebServer $ \_ -> runExceptT (Engine.runClusterDiffer clusterDiffer)
+        case result' of
+          Left err -> do
+            Log.error' (show err)
+            exitWith (ExitFailure 1)
+          Right _ -> do
+            Log.log' "compare-revisions terminated successfully"
+            exitSuccess
