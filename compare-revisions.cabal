@@ -45,6 +45,7 @@ library
     , network-uri
     , optparse-applicative
     , process
+    , process-extras
     , prometheus-client
     , prometheus-metrics-ghc
     , regex-tdfa

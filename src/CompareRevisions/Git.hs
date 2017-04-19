@@ -17,6 +17,7 @@ module CompareRevisions.Git
 import Protolude
 
 import qualified Control.Logging as Log
+import qualified Data.ByteString.Char8 as ByteString
 import qualified Data.Text as Text
 import Data.Aeson (FromJSON(..), ToJSON(..), withText)
 import qualified Network.URI
@@ -33,9 +34,9 @@ import System.Process
   ( CmdSpec(..)
   , CreateProcess(..)
   , proc
-  , readCreateProcessWithExitCode
   , showCommandForUser
   )
+import System.Process.ByteString (readCreateProcessWithExitCode)
 
 import CompareRevisions.SCP (SCP, formatSCP, parseSCP)
 
@@ -80,8 +81,8 @@ data Revision
 -- | An error that occurs while we're doing stuff.
 data GitError
   -- | An error occurred running the 'git' subprocess.
-  = GitProcessError Text Int Text Text (Maybe FilePath)
-  | InvalidRevision Text
+  = GitProcessError Text Int ByteString ByteString (Maybe FilePath)
+  | InvalidRevision ByteString
   deriving (Eq, Show)
 
 -- | Sync a repository.
@@ -146,7 +147,7 @@ ensureCheckout repoPath branch workTreePath = do
   where
     -- | Get the SHA-1 of the head of a branch.
     hashForBranchHead :: (HasCallStack, MonadError GitError m, MonadIO m) => Branch -> m Hash
-    hashForBranchHead (Branch b) = Hash . Text.strip . fst <$> runGitInRepo repoPath ["rev-list", "-n1", b]
+    hashForBranchHead (Branch b) = Hash . Text.strip . toS . fst <$> runGitInRepo repoPath ["rev-list", "-n1", b]
 
     -- | Checkout a branch of a repo to a given path.
     addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()
@@ -198,36 +199,34 @@ getLog repoPath (RevSpec start) (RevSpec end) paths = do
                                 Just ps -> ["--"] <> map toS ps
   (out, _) <- runGitInRepo repoPath withFilter
   -- XXX: This will bork on the first invalid line. We can do better.
-  traverse parseRevision (Text.lines out)
+  traverse parseRevision (ByteString.lines out)
   where
     range = start <> ".." <> end
     parseRevision line =
-      case Text.splitOn "::" (Text.strip line) of
+      case Text.splitOn "::" (decodeUtf8 line) of
         [hash, date, name, subject] -> pure (Revision hash date name subject)
         _ -> throwError (InvalidRevision line)
 
 -- | Run 'git' in a repository.
-runGitInRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> [Text] -> m (Text, Text)
+runGitInRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> [Text] -> m (ByteString, ByteString)
 runGitInRepo repoPath args = runProcess $ gitCommand (Just repoPath) args
 
 -- | Run 'git' on the command line.
-runGit :: (HasCallStack, MonadError GitError m, MonadIO m) => [Text] -> m (Text, Text)
+runGit :: (HasCallStack, MonadError GitError m, MonadIO m) => [Text] -> m (ByteString, ByteString)
 runGit args = runProcess $ gitCommand Nothing args
 
 -- | Run a process.
-runProcess :: (HasCallStack, MonadError GitError m, MonadIO m) => CreateProcess -> m (Text, Text)
+runProcess :: (HasCallStack, MonadError GitError m, MonadIO m) => CreateProcess -> m (ByteString, ByteString)
 runProcess process = do
   Log.debug' $ "Running process: " <> toS cmdInfo <> "; " <> show process
   (exitCode, out, err) <- liftIO $ readCreateProcessWithExitCode process ""
-  let out' = toS out
-  let err' = toS err
   case exitCode of
     ExitFailure e -> do
       Log.warn' $ "Process failed (" <> show e <> "): " <> toS cmdInfo
-      throwError $ GitProcessError (toS cmdInfo) e out' err' (cwd process)
+      throwError $ GitProcessError (toS cmdInfo) e out err (cwd process)
     ExitSuccess -> do
       Log.debug' $ "Process succeeded: " <> toS cmdInfo
-      pure (out', err')
+      pure (out, err)
   where
     cmdInfo =
       case spec of

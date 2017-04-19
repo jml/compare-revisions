@@ -9,9 +9,7 @@ import Protolude
 
 import Control.Logging (LogLevel(..), log', warn', setLogLevel, setLogTimeFormat, withStdoutLogging)
 import GHC.Stats (getGCStatsEnabled)
-import Network.Wai.Handler.Warp
-       (Port, Settings, defaultSettings, runSettings, setBeforeMainLoop,
-        setPort)
+import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Middleware.RequestLogger as RL
 import Options.Applicative
        (Parser, auto, eitherReader, help, long, metavar, option, switch, value)
@@ -26,10 +24,11 @@ import qualified CompareRevisions.Server.Logging as Log
 
 -- | Generic web server configuration.
 data Config = Config
-  { port :: Port  -- ^ Port to listen on
+  { port :: Warp.Port  -- ^ Port to listen on
   , accessLogs :: AccessLogs  -- ^ Level of access logs to display
   , logLevel :: LogLevel  -- ^ Level of regular logs to display
   , enableGhcMetrics :: Bool  -- ^ Whether to include Prometheus metrics for GHC runtime stats
+  , debugExceptions :: Bool -- ^ Whether to show detailed exception information on 500s
   } deriving (Eq, Show)
 
 -- | Command-line flags for generating 'Config'.
@@ -52,6 +51,11 @@ flags =
         (fold
            [ long "ghc-metrics"
            , help "Export GHC metrics. Requires running with +RTS."
+           ])
+  <*> switch
+        (fold
+           [ long "debug-exceptions"
+           , help "Show exceptions on 500."
            ])
   where
     parseAccessLogs "none" = pure Disabled
@@ -79,7 +83,7 @@ run config@Config{..} app = do
          unless statsEnabled $
            warn' "Exporting GHC metrics but GC stats not enabled. Re-run with +RTS -T."
          void $ Prom.register Prom.ghcMetrics
-    runSettings settings (middleware requests)
+    Warp.runSettings settings (middleware requests)
   where
     settings = warpSettings config
     middleware r =
@@ -93,8 +97,14 @@ run config@Config{..} app = do
 -- | Generate warp settings from config
 --
 -- Serve from a port and print out where we're serving from.
-warpSettings :: Config -> Settings
+warpSettings :: Config -> Warp.Settings
 warpSettings Config{..} =
-  setBeforeMainLoop printPort (setPort port defaultSettings)
+  Warp.setOnExceptionResponse exceptionHandler .
+  Warp.setBeforeMainLoop printPort .
+  Warp.setPort port
+  $ Warp.defaultSettings
   where
     printPort = log' ("Listening on :" <> show port)
+    exceptionHandler
+      | debugExceptions = Warp.exceptionResponseForDebug
+      | otherwise = Warp.defaultOnExceptionResponse
