@@ -38,6 +38,7 @@ import System.FilePath ((</>))
 
 import CompareRevisions.Duration (Duration)
 import qualified CompareRevisions.Git as Git
+import CompareRevisions.Kube (ImageName)
 import CompareRevisions.Regex (RegexReplace)
 
 
@@ -95,8 +96,6 @@ instance ToJSON Config where
 instance FromJSON Config where
   parseJSON = genericParseJSON configOptions
 
--- TODO: Dedupe with ImageName in Kube
-type ImageName = Text
 type PolicyName = Text
 
 -- | The repository with the Kubernetes manifests in it.

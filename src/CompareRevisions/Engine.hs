@@ -78,8 +78,6 @@ data Error
 --  - Map ImageName (ImageDiff, RevisionLog)
 --  - Git SHA-1 of config repository
 
--- XXX: Two 'ImageName' types in this repo.
-
 -- | Sync repository underneath our root directory, returning the path of the
 -- repository locally.
 syncRepo :: (MonadIO m, MonadError Git.GitError m) => FilePath -> Git.URL -> m FilePath
