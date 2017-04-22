@@ -12,15 +12,16 @@ import qualified CompareRevisions.API as API
 
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Server as Server
+import qualified CompareRevisions.Server.Logging as Log
 
 -- | Overall command-line configuration.
-data Config = Config Config.AppConfig Server.Config deriving (Eq, Show)
+data Config = Config Config.AppConfig Server.Config Log.LogLevel deriving (Eq, Show)
 
 -- | Command-line parser for compare-revisions.
 options :: ParserInfo Config
 options = info (helper <*> parser) description
   where
-    parser = Config <$> Config.flags <*> Server.flags
+    parser = Config <$> Config.flags <*> Server.flags <*> Log.flags
 
     description =
       fold
@@ -32,6 +33,7 @@ options = info (helper <*> parser) description
 -- | Run the service.
 startApp :: IO ()
 startApp = do
-  Config appConfig serverConfig <- execParser options
-  let app = serve API.api (API.server appConfig)
-  Server.run serverConfig app
+  Config appConfig serverConfig logLevel <- execParser options
+  Log.withLogging logLevel $ do
+    let app = serve API.api (API.server appConfig)
+    Server.run serverConfig app

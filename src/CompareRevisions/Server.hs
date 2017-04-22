@@ -7,7 +7,7 @@ module CompareRevisions.Server
 
 import Protolude
 
-import Control.Logging (LogLevel(..), log', warn', setLogLevel, setLogTimeFormat, withStdoutLogging)
+import qualified Control.Logging as Log
 import GHC.Stats (getGCStatsEnabled)
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Middleware.RequestLogger as RL
@@ -19,14 +19,12 @@ import Servant (Application)
 
 import CompareRevisions.Server.Instrument
        (defaultPrometheusSettings, prometheus, requestDuration)
-import qualified CompareRevisions.Server.Logging as Log
 
 
 -- | Generic web server configuration.
 data Config = Config
   { port :: Warp.Port  -- ^ Port to listen on
   , accessLogs :: AccessLogs  -- ^ Level of access logs to display
-  , logLevel :: LogLevel  -- ^ Level of regular logs to display
   , enableGhcMetrics :: Bool  -- ^ Whether to include Prometheus metrics for GHC runtime stats
   , debugExceptions :: Bool -- ^ Whether to show detailed exception information on 500s
   } deriving (Eq, Show)
@@ -40,13 +38,6 @@ flags =
         (eitherReader parseAccessLogs)
         (fold
            [long "access-logs", help "How to log HTTP access", value Disabled])
-  <*> option
-        (eitherReader (pure . Log.fromKeyword . toS))
-        (fold
-           [ long "log-level"
-           , help "Minimum severity for log messages"
-           , value LevelInfo
-           ])
   <*> switch
         (fold
            [ long "ghc-metrics"
@@ -74,16 +65,13 @@ data AccessLogs
 -- | Run a web server for 'app'. Blocks until the server is shut down.
 run :: Config -> Application -> IO ()
 run config@Config{..} app = do
-  setLogTimeFormat "%Y-%m-%d %H:%M:%S.%q"
-  setLogLevel logLevel
-  withStdoutLogging $ do
-    requests <- Prom.registerIO requestDuration
-    when enableGhcMetrics $
-      do statsEnabled <- getGCStatsEnabled
-         unless statsEnabled $
-           warn' "Exporting GHC metrics but GC stats not enabled. Re-run with +RTS -T."
-         void $ Prom.register Prom.ghcMetrics
-    Warp.runSettings settings (middleware requests)
+  requests <- Prom.registerIO requestDuration
+  when enableGhcMetrics $
+    do statsEnabled <- getGCStatsEnabled
+       unless statsEnabled $
+         Log.warn' "Exporting GHC metrics but GC stats not enabled. Re-run with +RTS -T."
+       void $ Prom.register Prom.ghcMetrics
+  Warp.runSettings settings (middleware requests)
   where
     settings = warpSettings config
     middleware r =
@@ -104,7 +92,7 @@ warpSettings Config{..} =
   Warp.setPort port
   $ Warp.defaultSettings
   where
-    printPort = log' ("Listening on :" <> show port)
+    printPort = Log.log' ("Listening on :" <> show port)
     exceptionHandler
       | debugExceptions = Warp.exceptionResponseForDebug
       | otherwise = Warp.defaultOnExceptionResponse
