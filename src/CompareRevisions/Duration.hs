@@ -24,6 +24,7 @@ module CompareRevisions.Duration
   , second
   , minute
   , hour
+  , sleep
   ) where
 
 import Protolude hiding (second)
@@ -31,6 +32,10 @@ import Protolude hiding (second)
 import Data.Aeson (FromJSON(..), ToJSON(..), withText)
 import Data.Attoparsec.Text ((<?>), Parser, double, endOfInput, signed, parseOnly)
 import Test.QuickCheck (Arbitrary)
+
+-- | Delay a thread for a Duration.
+sleep :: Duration -> IO ()
+sleep duration = threadDelay (round ((fromIntegral (toNanoseconds duration) :: Double) / 1000))
 
 -- | A duration in time.
 --
