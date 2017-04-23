@@ -39,10 +39,11 @@ type API
 api :: Proxy API
 api = Proxy
 
--- | compare-revisions API implementation.
+-- | API implementation.
 server :: Engine.ClusterDiffer -> Server API
 server clusterDiffer = images clusterDiffer :<|> revisions clusterDiffer :<|> pure RootPage
 
+-- | Show how images differ between two environments.
 images :: HasCallStack => Engine.ClusterDiffer -> Handler ImageDiffs
 images = map (ImageDiffs . map Engine.imageDiffs) . Engine.getCurrentDifferences
 
@@ -51,28 +52,32 @@ revisions :: Engine.ClusterDiffer -> Handler Revisions
 revisions = map Revisions . Engine.getCurrentDifferences
 
 
+standardPage :: Monad m => Text -> L.HtmlT m () -> L.HtmlT m ()
+standardPage title content =
+  L.doctypehtml_ $ do
+    L.head_ (L.title_ (L.toHtml title))
+    L.body_ $ do
+      L.h1_ (L.toHtml title)
+      content
+      L.p_ $ do
+        "Source code at "
+        L.a_ [L.href_ sourceURL] (L.toHtml sourceURL)
+  where
+    sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
+
 -- | Represents the root page of the service.
 data RootPage = RootPage
 
 -- | Very simple root HTML page.
 instance L.ToHtml RootPage where
-  toHtml _ =
-    L.doctypehtml_ $ do
-      L.head_ (L.title_ title)
-      L.body_ $ do
-        L.h1_ title
-        L.ul_ $ do
-          L.li_ $ L.a_ [L.href_ "/images"] "Compare images"
-          L.li_ $ L.a_ [L.href_ "/revisions"] "Compare revisions"
-          L.li_ $ L.a_ [L.href_ "/metrics"] (L.code_ "/metrics")
-          L.li_ $ L.a_ [L.href_ "/status"] (L.code_ "/status")
-          L.p_ $ do
-            "Source code at "
-            L.a_ [L.href_ sourceURL] (L.toHtml sourceURL)
-   where
-     title = "compare-revisions"
-     sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
   toHtmlRaw = L.toHtml
+  toHtml _ =
+    standardPage "compare-revisions" $
+      L.ul_ $ do
+        L.li_ $ L.a_ [L.href_ "/images"] "Compare images"
+        L.li_ $ L.a_ [L.href_ "/revisions"] "Compare revisions"
+        L.li_ $ L.a_ [L.href_ "/metrics"] (L.code_ "/metrics")
+        L.li_ $ L.a_ [L.href_ "/status"] (L.code_ "/status")
 
 
 newtype ImageDiffs = ImageDiffs (Maybe (Map Kube.KubeObject [Kube.ImageDiff])) deriving (Eq, Ord, Show, Generic)
@@ -91,16 +96,8 @@ instance ToJSON ImageDiffs where
 
 instance L.ToHtml ImageDiffs where
   toHtmlRaw = L.toHtml
-  toHtml (ImageDiffs diffs) =
-    L.doctypehtml_ $ do
-      L.head_ (L.title_ title)
-      L.body_ $ do
-        L.h1_ title
-        imageDiffs
+  toHtml (ImageDiffs diffs) = standardPage "compare-images" imageDiffs
     where
-      title = "compare-images"
-      rows diffs' = mconcat (map (L.tr_ . toRow) (flattenedImages diffs'))
-
       imageDiffs =
         case diffs of
           Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
@@ -111,6 +108,8 @@ instance L.ToHtml ImageDiffs where
                 L.th_ "dev"
                 L.th_ "prod" -- TODO: Read the environment names from the data structure, rather than hardcoding
               rows diffs'
+
+      rows diffs' = mconcat (map (L.tr_ . toRow) (flattenedImages diffs'))
       flattenedImages diffs' = sortOn Kube.getImageName (ordNub (fold diffs'))
 
       toRow (Kube.ImageAdded name label) = nameCell name <> labelCell label <> L.td_ "ADDED"
@@ -123,17 +122,12 @@ instance L.ToHtml ImageDiffs where
 
 newtype Revisions = Revisions (Maybe Engine.ClusterDiff) deriving (Show)
 
+-- TODO: JSON version of Revisions.
+
 instance L.ToHtml Revisions where
   toHtmlRaw = L.toHtml
-  toHtml (Revisions clusterDiff) =
-    L.doctypehtml_ $ do
-      L.head_ (L.title_ title)
-      L.body_ $ do
-        L.h1_ title
-        byImage
+  toHtml (Revisions clusterDiff) = standardPage "compare-revisions" byImage
     where
-      title = "compare-revisions"
-
       byImage =
         case clusterDiff of
           Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
