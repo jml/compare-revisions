@@ -61,7 +61,7 @@ $(EXES) lint test shell:
 	$(SUDO) time docker run $(RM) -ti \
 		-e SRC_PATH=$(shell pwd) \
 		-e STACK_IN_CONTAINER=1 \
-		-e STACK_ROOT=$(HOME) \
+		-e STACK_ROOT=$(HOME)/.stack \
 		-e HOME=$(shell pwd)/.stack-work/docker/_home \
 		-v $(HOME):$(HOME) \
 		-v $(HOME)/.stack:$(HOME)/.stack \
