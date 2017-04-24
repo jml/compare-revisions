@@ -39,7 +39,8 @@ startApp = do
   Log.withLogging logLevel $ do
     result <- runExceptT $ do
       clusterDiffer <- Engine.newClusterDiffer appConfig
-      let runWebServer = Server.run serverConfig (serve API.api (API.server clusterDiffer))
+      let webServer = API.server (Config.externalURL appConfig) clusterDiffer
+      let runWebServer = Server.run serverConfig (serve API.api webServer)
       liftIO $ withAsync runWebServer $ \_ -> runExceptT (Engine.runClusterDiffer clusterDiffer)
     case result of
       Left err -> do
