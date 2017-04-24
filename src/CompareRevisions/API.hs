@@ -77,8 +77,7 @@ instance L.ToHtml RootPage where
       L.ul_ $ do
         L.li_ $ L.a_ [L.href_ (getURL "images")] "Compare images"
         L.li_ $ L.a_ [L.href_ (getURL "revisions")] "Compare revisions"
-        L.li_ $ L.a_ [L.href_ (getURL "metrics")] (L.code_ "/metrics")
-        L.li_ $ L.a_ [L.href_ (getURL "status")] (L.code_ "/status")
+        L.li_ $ L.a_ [L.href_ (getURL "metrics")] (L.code_ "metrics")
     where
       getURL path =
         case parseRelativeReference path of
