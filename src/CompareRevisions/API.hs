@@ -16,6 +16,7 @@ import Protolude
 import Data.Aeson (ToJSON(..))
 import qualified Data.Map as Map
 import qualified Lucid as L
+import Network.URI (URI, parseRelativeReference, relativeTo, uriToString)
 import Servant (Server, Handler)
 import Servant.API (Get, JSON, (:<|>)(..), (:>))
 import Servant.HTML.Lucid (HTML)
@@ -40,8 +41,8 @@ api :: Proxy API
 api = Proxy
 
 -- | API implementation.
-server :: Engine.ClusterDiffer -> Server API
-server clusterDiffer = images clusterDiffer :<|> revisions clusterDiffer :<|> pure RootPage
+server :: URI -> Engine.ClusterDiffer -> Server API
+server externalURL clusterDiffer = images clusterDiffer :<|> revisions clusterDiffer :<|> pure (RootPage externalURL)
 
 -- | Show how images differ between two environments.
 images :: HasCallStack => Engine.ClusterDiffer -> Handler ImageDiffs
@@ -66,18 +67,22 @@ standardPage title content =
     sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
 
 -- | Represents the root page of the service.
-data RootPage = RootPage
+newtype RootPage = RootPage URI
 
 -- | Very simple root HTML page.
 instance L.ToHtml RootPage where
   toHtmlRaw = L.toHtml
-  toHtml _ =
+  toHtml (RootPage externalURL) =
     standardPage "compare-revisions" $
       L.ul_ $ do
-        L.li_ $ L.a_ [L.href_ "/images"] "Compare images"
-        L.li_ $ L.a_ [L.href_ "/revisions"] "Compare revisions"
-        L.li_ $ L.a_ [L.href_ "/metrics"] (L.code_ "/metrics")
-        L.li_ $ L.a_ [L.href_ "/status"] (L.code_ "/status")
+        L.li_ $ L.a_ [L.href_ (getURL "images")] "Compare images"
+        L.li_ $ L.a_ [L.href_ (getURL "revisions")] "Compare revisions"
+        L.li_ $ L.a_ [L.href_ (getURL "metrics")] (L.code_ "metrics")
+    where
+      getURL path =
+        case parseRelativeReference path of
+          Nothing -> panic $ toS path <> " is not a valid relative URI"
+          Just path' -> toS (uriToString identity (path' `relativeTo` externalURL) "")
 
 
 newtype ImageDiffs = ImageDiffs (Maybe (Map Kube.KubeObject [Kube.ImageDiff])) deriving (Eq, Ord, Show, Generic)
