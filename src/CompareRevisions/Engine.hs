@@ -115,7 +115,7 @@ calculateClusterDiff ClusterDiffer{..} = do
     getRevisions :: MonadIO m => Kube.ImageName -> (Kube.ImageLabel, Kube.ImageLabel) -> m (Either Error [Git.Revision])
     getRevisions name (start, end) = runExceptT $ do
       Config.ImageConfig{..} <- note (NoConfigForImage name) (Map.lookup name (images config))
-      compareRevisions gitRepoDir imageToRevisionPolicy gitURL start end paths
+      compareRevisions gitRepoDir imageToRevisionPolicy gitURL paths start end
 
 -- | Get the list of revisions that were added between two versions of an image.
 compareRevisions
@@ -123,11 +123,11 @@ compareRevisions
   => FilePath -- ^ Root directory for compare-revisions. Where we store downloaded repositories.
   -> Config.PolicyConfig -- ^ How to interpret image labels
   -> Git.URL -- ^ Where the code for the image can be found
+  -> Maybe [FilePath]  -- ^ Optional paths to filter logs by
   -> Kube.ImageLabel -- ^ The image label in the source environment
   -> Kube.ImageLabel -- ^ The image label in the target environment
-  -> Maybe [FilePath]  -- ^ Optional paths to filter logs by
   -> ExceptT Error m [Git.Revision]
-compareRevisions rootDirectory labelPolicy repoURL srcLabel tgtLabel paths = do
+compareRevisions rootDirectory labelPolicy repoURL paths srcLabel tgtLabel = do
   -- XXX: This duplicates work. Multiple images have the same Git repo, so we
   -- only need to sync it once.
   repoPath <- withExceptT GitError $ syncRepo rootDirectory repoURL
