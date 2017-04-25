@@ -112,6 +112,7 @@ calculateClusterDiff ClusterDiffer{..} = do
   -- well as images that are only deployed on one environment.
   let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- fold imageDiffs ]
   let (withErrors, valid) = Map.mapEitherWithKey lookupImage changedImages
+  -- TODO: Do this in parallel, rather than traversing.
   revisionDiffs <- fold <$> Map.traverseWithKey compareManyRevs (groupByRepo valid)
   pure (ClusterDiff (revisionDiffs <> map Left withErrors) imageDiffs)
   where
@@ -131,10 +132,10 @@ calculateClusterDiff ClusterDiffer{..} = do
     -- images names first by repository and then by log spec. This helps us
     -- run expensive git commands as few times as possible.
     groupByRepo
-      :: Map Kube.ImageName (Git.URL, LogSpec)
-      -> Map Git.URL (Map LogSpec [Kube.ImageName])
+      :: (Ord a, Ord b, Ord c)
+      => Map a (b, c)
+      -> Map b (Map c [a])
     groupByRepo images =
-      -- XXX: Maybe this can be done with a fold?
       Map.unionsWith (Map.unionWith (<>)) [ Map.singleton gitURL (Map.singleton logSpec [imageName])
                                           | (imageName, (gitURL, logSpec)) <- Map.toList images  ]
 
@@ -149,6 +150,7 @@ calculateClusterDiff ClusterDiffer{..} = do
       repoPath <- runExceptT $ withExceptT GitError $ syncRepo gitRepoDir gitURL
       case repoPath of
         Left err -> pure $ foldMap (\names -> newMapWithSameValue names (Left err)) imagesByLabel
+        -- TODO: Do this in parallel, rather than traversing.
         Right path -> fold <$> Map.traverseWithKey (compareRevs path) imagesByLabel
 
     -- | Get a single log spec, fanning it out to the image names that need it.
