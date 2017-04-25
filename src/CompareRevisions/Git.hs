@@ -151,7 +151,7 @@ ensureCheckout repoPath branch workTreePath = do
 
     -- | Checkout a branch of a repo to a given path.
     addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()
-    addWorkTree path (Hash hash) = do
+    addWorkTree path (Hash hash) =
       -- TODO: Doesn't handle case where path exists but is a file (not a
       -- directory), or doesn't contain a valid worktree.
       unlessM (liftIO $ fileExist path) $ do

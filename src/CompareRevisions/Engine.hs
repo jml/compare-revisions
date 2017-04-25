@@ -102,39 +102,71 @@ updateClusterDiff differ@ClusterDiffer{..} = do
   newDiff <- calculateClusterDiff differ
   liftIO . atomically $ writeTVar diff (Just newDiff)
 
+data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, Ord, Show)
+
 -- | Calculate a new diff between clusters.
 calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterDiff
 calculateClusterDiff ClusterDiffer{..} = do
   imageDiffs <- compareImages gitRepoDir config
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
-  let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- foldMap identity imageDiffs ]
-  revisionDiffs <- Map.traverseWithKey getRevisions changedImages
-  pure (ClusterDiff revisionDiffs imageDiffs)
+  let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- fold imageDiffs ]
+  let (withErrors, valid) = Map.mapEitherWithKey lookupImage changedImages
+  revisionDiffs <- fold <$> Map.traverseWithKey compareManyRevs (groupByRepo valid)
+  pure (ClusterDiff (revisionDiffs <> map Left withErrors) imageDiffs)
   where
-    getRevisions :: MonadIO m => Kube.ImageName -> (Kube.ImageLabel, Kube.ImageLabel) -> m (Either Error [Git.Revision])
-    getRevisions name (start, end) = runExceptT $ do
+    -- | Given an image name and a source and target label, return the URL for
+    -- the Git repository and the 'git log' needed to get the right revisions.
+    lookupImage
+      :: Kube.ImageName
+      -> (Kube.ImageLabel, Kube.ImageLabel)
+      -> Either Error (Git.URL, LogSpec)
+    lookupImage name (srcLabel, tgtLabel) = do
       Config.ImageConfig{..} <- note (NoConfigForImage name) (Map.lookup name (images config))
-      compareRevisions gitRepoDir imageToRevisionPolicy gitURL paths start end
+      endRev <- labelToRevision imageToRevisionPolicy srcLabel
+      startRev <- labelToRevision imageToRevisionPolicy tgtLabel
+      pure (gitURL, LogSpec startRev endRev paths)
 
--- | Get the list of revisions that were added between two versions of an image.
-compareRevisions
-  :: (MonadIO m)
-  => FilePath -- ^ Root directory for compare-revisions. Where we store downloaded repositories.
-  -> Config.PolicyConfig -- ^ How to interpret image labels
-  -> Git.URL -- ^ Where the code for the image can be found
-  -> Maybe [FilePath]  -- ^ Optional paths to filter logs by
-  -> Kube.ImageLabel -- ^ The image label in the source environment
-  -> Kube.ImageLabel -- ^ The image label in the target environment
-  -> ExceptT Error m [Git.Revision]
-compareRevisions rootDirectory labelPolicy repoURL paths srcLabel tgtLabel = do
-  -- XXX: This duplicates work. Multiple images have the same Git repo, so we
-  -- only need to sync it once.
-  repoPath <- withExceptT GitError $ syncRepo rootDirectory repoURL
-  -- TODO: Express this applicatively.
-  endRev <- labelToRevision labelPolicy srcLabel
-  startRev <- labelToRevision labelPolicy tgtLabel
-  withExceptT GitError $ Git.getLog repoPath startRev endRev paths
+    -- | Given a map of images to Git repositories and log specs, group the
+    -- images names first by repository and then by log spec. This helps us
+    -- run expensive git commands as few times as possible.
+    groupByRepo
+      :: Map Kube.ImageName (Git.URL, LogSpec)
+      -> Map Git.URL (Map LogSpec [Kube.ImageName])
+    groupByRepo images =
+      -- XXX: Maybe this can be done with a fold?
+      Map.unionsWith (Map.unionWith (<>)) [ Map.singleton gitURL (Map.singleton logSpec [imageName])
+                                          | (imageName, (gitURL, logSpec)) <- Map.toList images  ]
+
+    -- | Given a variety of log specs, get the logs, and map them to the image
+    -- name that needs them.
+    compareManyRevs
+      :: MonadIO io
+      => Git.URL
+      -> Map LogSpec [Kube.ImageName]
+      -> io (Map Kube.ImageName (Either Error [Git.Revision]))
+    compareManyRevs gitURL imagesByLabel = do
+      repoPath <- runExceptT $ withExceptT GitError $ syncRepo gitRepoDir gitURL
+      case repoPath of
+        Left err -> pure $ foldMap (\names -> newMapWithSameValue names (Left err)) imagesByLabel
+        Right path -> fold <$> Map.traverseWithKey (compareRevs path) imagesByLabel
+
+    -- | Get a single log spec, fanning it out to the image names that need it.
+    compareRevs
+      :: MonadIO io
+      => FilePath
+      -> LogSpec
+      -> [Kube.ImageName]
+      -> io (Map Kube.ImageName (Either Error [Git.Revision]))
+    compareRevs repoPath logSpec imageNames = do
+      revs <- runExceptT (loadRevs repoPath logSpec)
+      pure (newMapWithSameValue imageNames revs)
+
+    loadRevs :: MonadIO io => FilePath -> LogSpec -> ExceptT Error io [Git.Revision]
+    loadRevs repoPath (LogSpec startRev endRev paths) = withExceptT GitError $ Git.getLog repoPath startRev endRev paths
+
+    newMapWithSameValue :: Ord key => [key] -> value -> Map key value
+    newMapWithSameValue keys value = Map.fromList (zip keys (repeat value))
 
 -- | Sync repository underneath our root directory, returning the path of the
 -- repository locally.
