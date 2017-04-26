@@ -112,8 +112,7 @@ calculateClusterDiff ClusterDiffer{..} = do
   -- well as images that are only deployed on one environment.
   let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- fold imageDiffs ]
   let (withErrors, valid) = Map.mapEitherWithKey lookupImage changedImages
-  -- TODO: Do this in parallel, rather than traversing.
-  revisionDiffs <- fold <$> Map.traverseWithKey compareManyRevs (groupByRepo valid)
+  revisionDiffs <- fold <$> mapWithKeyConcurrently compareManyRevs (groupByRepo valid)
   pure (ClusterDiff (revisionDiffs <> map Left withErrors) imageDiffs)
   where
     -- | Given an image name and a source and target label, return the URL for
@@ -150,8 +149,7 @@ calculateClusterDiff ClusterDiffer{..} = do
       repoPath <- runExceptT $ withExceptT GitError $ syncRepo gitRepoDir gitURL
       case repoPath of
         Left err -> pure $ foldMap (\names -> newMapWithSameValue names (Left err)) imagesByLabel
-        -- TODO: Do this in parallel, rather than traversing.
-        Right path -> fold <$> Map.traverseWithKey (compareRevs path) imagesByLabel
+        Right path -> fold <$> mapWithKeyConcurrently (compareRevs path) imagesByLabel
 
     -- | Get a single log spec, fanning it out to the image names that need it.
     compareRevs
@@ -169,6 +167,10 @@ calculateClusterDiff ClusterDiffer{..} = do
 
     newMapWithSameValue :: Ord key => [key] -> value -> Map key value
     newMapWithSameValue keys value = Map.fromList (zip keys (repeat value))
+
+
+mapWithKeyConcurrently :: MonadIO io => (k -> a -> IO b) -> Map k a -> io (Map k b)
+mapWithKeyConcurrently f d = liftIO $ runConcurrently (Map.traverseWithKey (\k v -> Concurrently (f k v)) d)
 
 -- | Sync repository underneath our root directory, returning the path of the
 -- repository locally.
