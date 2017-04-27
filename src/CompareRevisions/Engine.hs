@@ -21,7 +21,7 @@ import Data.Yaml (ParseException, decodeFileEither)
 import qualified Prometheus as Prom
 import System.Directory (canonicalizePath)
 import System.FilePath ((</>), takeDirectory)
-import System.FSNotify (Event(..), StopListening, WatchManager, eventPath, watchDir)
+import System.FSNotify (Event(..), StopListening, WatchManager, eventPath, watchDir, withManager)
 
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Duration as Duration
@@ -31,22 +31,20 @@ import CompareRevisions.Kube (KubeObject(..), ImageDiff(..))
 import CompareRevisions.Regex (RegexReplace, regexReplace)
 import CompareRevisions.Validator (Validator, runValidator, throwE)
 
--- TODO: Actually watch config file for changes, then update.
-
 -- TODO: Metrics for comparing revisions.
 
 -- | Metrics used in reporting application.
-newtype Metrics = Metrics { _configFileChanges :: Prom.Metric (Prom.Vector Status Prom.Counter)
+newtype Metrics = Metrics { configFileChanges :: Prom.Metric (Prom.Vector Status Prom.Counter)
                           }
 
 type Status = String
-_success, _failure :: Status
-_success = "success"
-_failure = "failure"
+success, failure :: Status
+success = "success"
+failure = "failure"
 
 -- | Initialize metrics.
-_initMetrics :: MonadIO io => io Metrics
-_initMetrics = Metrics
+initMetrics :: MonadIO io => io Metrics
+initMetrics = Metrics
   <$> liftIO (Prom.registerIO (Prom.vector
                                 ("status" :: Status)
                                 (Prom.counter (Prom.Info
@@ -74,15 +72,20 @@ data ClusterDiff
 data ClusterDiffer
   = ClusterDiffer
   { gitRepoDir :: FilePath  -- ^ Path to where we'll put the Git repositories.
-  , config :: ValidConfig  -- ^ Parsed configuration for what images and repositories to compare.
+  , configFile :: FilePath -- ^ Where the config file lives.
+  , config :: TVar ValidConfig  -- ^ Parsed configuration for what images and repositories to compare.
   , diff :: TVar (Maybe ClusterDiff)  -- ^ Result of comparing images and revisions.
+  , metrics :: Metrics -- ^ Prometheus metrics for cluster differ
   }
 
 -- | Construct a new 'ClusterDiffer', erroring if the configuration file is invalid.
 newClusterDiffer :: (MonadIO m, MonadError Error m) => Config.AppConfig -> m ClusterDiffer
 newClusterDiffer Config.AppConfig{..} = do
   config <- loadConfigFile configFile
-  ClusterDiffer gitRepoDir config <$> (liftIO . newTVarIO) empty
+  configVar <- liftIO (newTVarIO config)
+  diff <- liftIO (newTVarIO empty)
+  metrics <- initMetrics
+  pure $ ClusterDiffer gitRepoDir configFile configVar diff metrics
 
 -- | Get the most recently calculated differences from 'ClusterDiffer'.
 getCurrentDifferences :: MonadIO m => ClusterDiffer -> m (Maybe ClusterDiff)
@@ -91,10 +94,18 @@ getCurrentDifferences = liftIO . atomically . readTVar . diff
 -- | Run a 'ClusterDiffer', looping forever, erroring out if the
 -- configuration file is invalid.
 runClusterDiffer :: MonadIO m => ClusterDiffer -> ExceptT Error m ()
-runClusterDiffer clusterDiffer@ClusterDiffer{..} = do
-  updateClusterDiff clusterDiffer
-  liftIO . Duration.sleep . Config.pollInterval . configRepo $ config
-  runClusterDiffer clusterDiffer
+runClusterDiffer clusterDiffer@ClusterDiffer{..} =
+  liftIO $ withManager $ \mgr -> do
+    void $ watchFile mgr configFile (configFileChanged clusterDiffer)
+    forever loop
+  where
+    loop = do
+      cfg <- atomically . readTVar $ config
+      result <- runExceptT $ updateClusterDiff clusterDiffer
+      case result of
+        Left err -> Log.warn' $ "Updating cluster diff failed: " <> show err
+        Right _ -> pass
+      Duration.sleep . Config.pollInterval . configRepo $ cfg
 
 -- | Update the current cluster diff between clusters.
 updateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ()
@@ -102,27 +113,45 @@ updateClusterDiff differ@ClusterDiffer{..} = do
   newDiff <- calculateClusterDiff differ
   liftIO . atomically $ writeTVar diff (Just newDiff)
 
+configFileChanged :: (Prom.MonadMonitor m, MonadIO m) => ClusterDiffer -> Event -> m ()
+configFileChanged _ (Removed _ _) = pass
+configFileChanged _ (Added _ _) = pass
+configFileChanged ClusterDiffer{..} (Modified path _) = do
+  Log.log' $ "Config file changed: " <> toS path
+  result <- runExceptT $ loadConfigFile path
+  status <- case result of
+    Left err -> do
+      Log.warn' $ "Failed to parse config file: " <> show err
+      pure failure
+    Right cfg -> do
+      liftIO $ atomically $ writeTVar config cfg
+      pure success
+  Prom.withLabel status Prom.incCounter . configFileChanges $ metrics
+
+
 data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, Ord, Show)
 
 -- | Calculate a new diff between clusters.
 calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterDiff
 calculateClusterDiff ClusterDiffer{..} = do
-  imageDiffs <- compareImages gitRepoDir config
+  cfg <- liftIO . atomically . readTVar $ config
+  imageDiffs <- compareImages gitRepoDir cfg
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
   let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- fold imageDiffs ]
-  let (withErrors, valid) = Map.mapEitherWithKey lookupImage changedImages
+  let (withErrors, valid) = Map.mapEitherWithKey (lookupImage cfg) changedImages
   revisionDiffs <- fold <$> mapWithKeyConcurrently compareManyRevs (groupByRepo valid)
   pure (ClusterDiff (revisionDiffs <> map Left withErrors) imageDiffs)
   where
     -- | Given an image name and a source and target label, return the URL for
     -- the Git repository and the 'git log' needed to get the right revisions.
     lookupImage
-      :: Kube.ImageName
+      :: ValidConfig
+      -> Kube.ImageName
       -> (Kube.ImageLabel, Kube.ImageLabel)
       -> Either Error (Git.URL, LogSpec)
-    lookupImage name (srcLabel, tgtLabel) = do
-      Config.ImageConfig{..} <- note (NoConfigForImage name) (Map.lookup name (images config))
+    lookupImage cfg name (srcLabel, tgtLabel) = do
+      Config.ImageConfig{..} <- note (NoConfigForImage name) (Map.lookup name (images cfg))
       endRev <- labelToRevision imageToRevisionPolicy srcLabel
       startRev <- labelToRevision imageToRevisionPolicy tgtLabel
       pure (gitURL, LogSpec startRev endRev paths)
@@ -228,48 +257,6 @@ data ConfigError
   = UnknownPolicyName Kube.ImageName Config.PolicyName
   deriving (Eq, Ord, Show)
 
--- | Watch 'AppState' and fire 'configChanged' event if it changes.
---
--- XXX: It's possible this could be folded into 'updateConfig', which only
--- sets the 'TVar' -- why not have it just call 'configChanged'?
-_watchConfigs :: MonadIO m => TVar ValidConfig -> (ValidConfig -> m ())  -> m ()
-_watchConfigs = watchTVar
-
--- | Watch a TVar and perform an action when it changes.
-watchTVar :: (Eq a, MonadIO m) => TVar a -> (a -> m ())  -> m ()
-watchTVar var valueChanged = do
-  value <- liftIO . atomically . readTVar $ var
-  loop value
-  where
-    loop val = do
-      valueChanged val
-      newValue <- liftIO . atomically . blockUntil (/= val) $ var
-      loop newValue
-
-    blockUntil p var' = do
-      val <- readTVar var'
-      if p val
-        then pure val
-        else retry
-
-_updateConfig :: (Prom.MonadMonitor m, MonadReader Metrics m, MonadIO m) => FilePath -> TVar ValidConfig -> m ()
-_updateConfig path configVar = do
-  result <- runExceptT $ loadConfigFile path
-  metrics <- ask
-  status <- case result of
-    Left err -> do
-      Log.warn' $ "Failed to parse config file: " <> show err
-      pure _failure
-    Right cfg -> do
-      liftIO $ atomically $ writeTVar configVar cfg
-      pure _success
-  Prom.withLabel status Prom.incCounter . _configFileChanges $ metrics
-
-_configFileChanged :: (Prom.MonadMonitor m, MonadReader Metrics m, MonadIO m) => TVar ValidConfig -> Event -> m ()
-_configFileChanged _ (Removed _ _) = pure ()
-_configFileChanged _ (Added _ _) = pure ()
-_configFileChanged configVar (Modified path _) = _updateConfig path configVar
-
 loadConfigFile :: (MonadError Error io, MonadIO io) => FilePath -> io ValidConfig
 loadConfigFile path = do
   config <- liftIO (decodeFileEither path)
@@ -281,8 +268,8 @@ loadConfigFile path = do
         Right result -> pure result
 
 -- | Watch for changes to a single file, performing 'action' when it happens.
-_watchFile :: MonadIO io => WatchManager -> FilePath -> (Event -> IO ()) -> io StopListening
-_watchFile mgr filePath action = do
+watchFile :: MonadIO io => WatchManager -> FilePath -> (Event -> IO ()) -> io StopListening
+watchFile mgr filePath action = do
   canonicalPath <- liftIO $ canonicalizePath filePath
   let dir = takeDirectory canonicalPath
   liftIO $ watchDir mgr dir ((== canonicalPath) . eventPath) action
