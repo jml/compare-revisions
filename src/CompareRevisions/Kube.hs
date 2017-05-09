@@ -14,7 +14,6 @@ module CompareRevisions.Kube
   , ImageName
   , ImageLabel
   , getClusterDefinition
-  , getImages
     -- * Image diffs
   , ImageDiff(..)
   , getDifferingImages
@@ -74,78 +73,6 @@ namespacedName :: KubeObject -> Text
 namespacedName KubeObject{..} = namespace <> "/" <> name
 
 
-data ProcessError = ProcessError ExitCode ByteString deriving (Eq, Show)
-
--- | Load the definition of a Kubernetes object from a cluster.
---
--- Uses @kubectl@ under the hood.
-getClusterDefinition :: Maybe FilePath -> KubeObject -> ExceptT ProcessError IO ByteString
-getClusterDefinition kubeConfig KubeObject{..} = do
-  (exitCode, out, err) <- lift $ readProcessWithExitCode "kubectl" kubectlArgs ""
-  case exitCode of
-    ExitSuccess -> pure (toS out)
-    ExitFailure _ -> throwError (ProcessError exitCode (toS err))
-  where
-    kubectlArgs =
-      map toS [ "get"
-              , "-o=json"
-              , "--namespace=" <> namespace
-              ] <> kubeConfigOption <>
-      map toS [ kind
-              , name
-              ]
-
-    kubeConfigOption =
-      case kubeConfig of
-        Nothing -> []
-        Just kubeConfigPath -> ["--kubeconfig=" <> kubeConfigPath]
-
-
--- | A Docker image.
-data Image
-  = Image { name :: ImageName
-          , label :: Maybe ImageLabel
-          } deriving (Eq, Ord, Show)
-
-type ImageName = Text
-type ImageLabel = Text
-
--- | A set of images is map from names of images to optional labels.
-type Images = Map ImageName (Maybe ImageLabel)
-
--- | Get all the names of images within a JSON value.
-getImageNames :: Value -> [Text]
-getImageNames (Object obj) =
-  image <> rest
-  where
-    image =
-      case HashMap.lookup "image" obj of
-        Just (String name) -> [name]
-        _ -> []
-    rest = concatMap getImageNames obj
-getImageNames (Array arr) = concatMap getImageNames arr
-getImageNames _ = []
-
-
--- | Parse an image name.
-parseImageName :: Text -> Maybe Image
-parseImageName imageName =
-  case splitOn ":" imageName of
-    [name] -> Just (Image name Nothing)
-    [name, label] -> Just (Image name (Just label))
-    _ -> Nothing
-
--- | Get the images from a Kubernetes object definition.
---
--- Because a single definition can have multiple images, we return a map of
--- image name to image label, where the label is optional.
-getImages :: Value -> Images
-getImages value =
-  Map.fromList [ (name, label) | Image name label <- images ]
-  where
-    images = mapMaybe parseImageName (getImageNames value)
-
-
 data ImageDiff
   = ImageAdded ImageName (Maybe ImageLabel)
   | ImageChanged ImageName (Maybe ImageLabel) (Maybe ImageLabel)
@@ -159,25 +86,90 @@ getImageName (ImageAdded name _) = name
 getImageName (ImageChanged name _ _) = name
 getImageName (ImageRemoved name _) = name
 
-compareImages :: Images -> Images -> [ImageDiff]
-compareImages source target =
-  foreach (Map.toList (mapDiff source target)) $
+
+-- | Given two sets of Kubernetes objects, return the images that differ
+-- between them.
+getDifferingImages :: Env -> Env -> Map KubeObject [ImageDiff]
+getDifferingImages sourceEnv targetEnv =
+  Map.mapMaybe getImageDiffs (diffMap sourceImages targetImages)
+  where
+    sourceImages, targetImages :: Map KubeObject (Map ImageName (Maybe ImageLabel))
+    sourceImages = map getImagesFromObject sourceEnv
+    targetImages = map getImagesFromObject targetEnv
+
+    -- If a Kubernetes object was added, we don't really care about the images
+    -- within.
+    getImageDiffs (Added _) = Nothing
+    -- Likewise, we don't care if an object was removed.
+    getImageDiffs (Removed _) = Nothing
+    -- If an object was changed, we want to get the changes.
+    getImageDiffs (Changed src tgt) = Just (compareImageSets src tgt)
+
+
+-- | A Docker image.
+data Image
+  = Image { name :: ImageName
+          , label :: Maybe ImageLabel
+          } deriving (Eq, Ord, Show)
+
+type ImageName = Text
+type ImageLabel = Text
+
+-- | Get the images from a Kubernetes object definition.
+--
+-- Because a single definition can have multiple images, we return a map of
+-- image name to image label, where the label is optional.
+getImagesFromObject :: Value -> Map ImageName (Maybe ImageLabel)
+getImagesFromObject value =
+  Map.fromList [ (name, label) | Image name label <- images ]
+  where
+    images = mapMaybe parseImageName (getImageNames value)
+
+    -- | Get all the names of images within a JSON value.
+    getImageNames :: Value -> [Text]
+    getImageNames (Object obj) =
+      image <> rest
+      where
+        image =
+          case HashMap.lookup "image" obj of
+            Just (String name) -> [name]
+            _ -> []
+        rest = concatMap getImageNames obj
+    getImageNames (Array arr) = concatMap getImageNames arr
+    getImageNames _ = []
+
+    -- | Parse an image name.
+    parseImageName :: Text -> Maybe Image
+    parseImageName imageName =
+      case splitOn ":" imageName of
+        [name] -> Just (Image name Nothing)
+        [name, label] -> Just (Image name (Just label))
+        _ -> Nothing
+
+
+-- | Given two sets of image, a @source@ and a @target@ set, that map names of
+-- images to labels, return a list of all image differences.
+compareImageSets :: Map ImageName (Maybe ImageLabel) -> Map ImageName (Maybe ImageLabel) -> [ImageDiff]
+compareImageSets source target =
+  foreach (Map.toList (diffMap source target)) $
   \(name, diff) ->
     case diff of
       Added x -> ImageAdded name x
       Changed x y -> ImageChanged name x y
       Removed x -> ImageRemoved name x
 
--- | A difference in a set of values.
+
+
+-- | A difference in a set of generic values.
 data Diff value
   = Added value
   | Changed value value
   | Removed value
   deriving (Eq, Ord, Show)
 
--- | Compare two maps.
-mapDiff :: (Ord key, Eq value) => Map key value -> Map key value -> Map key (Diff value)
-mapDiff source target = Map.fromList (go (Map.toAscList source) (Map.toAscList target))
+-- | Compare two maps. The returned map has the union of the keys of both maps.
+diffMap :: (Ord key, Eq value) => Map key value -> Map key value -> Map key (Diff value)
+diffMap source target = Map.fromList (go (Map.toAscList source) (Map.toAscList target))
   where
     go xs [] = map (second Added) xs
     go [] ys = map (second Removed) ys
@@ -206,6 +198,8 @@ loadEnvFromDisk directory = do
         Nothing -> Nothing
         Just kubeObj -> Just (kubeObj, v)
 
+data ProcessError = ProcessError ExitCode ByteString deriving (Eq, Show)
+
 -- | Given a @kubeConfig@ and some @kubeObjects@, fetch their definitions from
 -- a cluster.
 --
@@ -217,22 +211,29 @@ loadEnvFromCluster kubeConfig kubeObjects = do
   let objToBytes = zip kubeObjects bytes
   pure (Map.fromList (mapMaybe (traverse (Aeson.decode . toS)) objToBytes))
 
--- | Given two sets of Kubernetes objects, return the images that differ
--- between them.
-getDifferingImages :: Env -> Env -> Map KubeObject [ImageDiff]
-getDifferingImages sourceEnv targetEnv =
-  Map.mapMaybe getImageDiffs (mapDiff sourceImages targetImages)
+-- | Load the definition of a Kubernetes object from a cluster.
+--
+-- Uses @kubectl@ under the hood.
+getClusterDefinition :: Maybe FilePath -> KubeObject -> ExceptT ProcessError IO ByteString
+getClusterDefinition kubeConfig KubeObject{..} = do
+  (exitCode, out, err) <- lift $ readProcessWithExitCode "kubectl" kubectlArgs ""
+  case exitCode of
+    ExitSuccess -> pure (toS out)
+    ExitFailure _ -> throwError (ProcessError exitCode (toS err))
   where
-    sourceImages = map getImages sourceEnv
-    targetImages = map getImages targetEnv
+    kubectlArgs =
+      map toS [ "get"
+              , "-o=json"
+              , "--namespace=" <> namespace
+              ] <> kubeConfigOption <>
+      map toS [ kind
+              , name
+              ]
 
-    -- If a Kubernetes object was added, we don't really care about the images
-    -- within.
-    getImageDiffs (Added _) = Nothing
-    -- Likewise, we don't care if an object was removed.
-    getImageDiffs (Removed _) = Nothing
-    -- If an object was changed, we want to get the changes.
-    getImageDiffs (Changed src tgt) = Just (compareImages src tgt)
+    kubeConfigOption =
+      case kubeConfig of
+        Nothing -> []
+        Just kubeConfigPath -> ["--kubeconfig=" <> kubeConfigPath]
 
 
 -- | Breadth-first traversal of @directory@, yielding all files.
