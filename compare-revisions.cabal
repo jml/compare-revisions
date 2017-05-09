@@ -71,6 +71,9 @@ library
       CompareRevisions.Engine
       CompareRevisions.Git
       CompareRevisions.Kube
+      CompareRevisions.Kube.Diff
+      CompareRevisions.Kube.Load
+      CompareRevisions.Kube.Types
       CompareRevisions.Regex
       CompareRevisions.SCP
       CompareRevisions.Server
