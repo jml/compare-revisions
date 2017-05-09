@@ -9,9 +9,11 @@ category: Web
 
 ghc-options: -Wall -Werror
 default-extensions:
+  - DuplicateRecordFields
   - NoImplicitPrelude
   - OverloadedStrings
   - RecordWildCards
+  - TypeApplications
 
 dependencies:
   - base >= 4.9 && < 5

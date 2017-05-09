@@ -1,6 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE TypeApplications #-}
 -- | Regular expression substitution.
 --
 -- I can't believe I am writing this, but there isn't a substitution function

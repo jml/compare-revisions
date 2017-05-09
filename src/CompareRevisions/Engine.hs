@@ -1,4 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 module CompareRevisions.Engine
   ( Error(..)
@@ -29,7 +28,7 @@ import qualified CompareRevisions.Git as Git
 import qualified CompareRevisions.Kube as Kube
 import CompareRevisions.Kube (KubeObject(..), ImageDiff(..))
 import CompareRevisions.Regex (RegexReplace, regexReplace)
-import CompareRevisions.Validator (Validator, runValidator, throwE)
+import CompareRevisions.Validator (Validator(runValidator), throwE)
 
 -- TODO: Metrics for comparing revisions.
 

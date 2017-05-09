@@ -1,4 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
 module CompareRevisions.Kube
   ( -- * Objects in Kubernetes
     KubeObject(..)
