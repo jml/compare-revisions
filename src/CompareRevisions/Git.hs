@@ -142,7 +142,9 @@ ensureCheckout repoPath branch workTreePath = do
     Nothing -> pass
     Just oldTreePath
       | oldTreePath == canonicalTree -> pass
-      | otherwise -> removeWorkTree oldTreePath
+      | otherwise -> do
+          Log.debug' $ "Removing old working tree: " <> toS oldTreePath
+          removeWorkTree oldTreePath
 
   where
     -- | Get the SHA-1 of the head of a branch.
