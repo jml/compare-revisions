@@ -15,19 +15,26 @@ tests = testSpec "Git" $
   describe "ensureCheckout" $
     it "checks out a repository" $ withLogging LevelError $ withSystemTempDirectory "base-directory" $ \baseDir -> do
       let repoDir = baseDir </> "repo"
-      void $ gitOp $ Git.runGit ["init", toS repoDir]
+      gitInit repoDir
       writeFile (repoDir </> "hello") "dummy content"
-      void $ gitOp $ Git.runGitInRepo repoDir ["add", "hello"]
-      void $ gitOp $ Git.runGitInRepo repoDir ["commit", "-m", "Initial commit"]
+      git repoDir ["add", "hello"]
+      git repoDir ["commit", "-m", "Initial commit"]
       let workingTreeDir = baseDir </> "working-tree"
-      void $ gitOp $ Git.ensureCheckout repoDir (Git.Branch "master") workingTreeDir
+      gitOp $ Git.ensureCheckout repoDir (Git.Branch "master") workingTreeDir
       contents <- readFile (workingTreeDir </> "hello")
       contents `shouldBe` "dummy content"
 
 
-gitOp :: Monad m => ExceptT Git.GitError m a -> m a
+git :: MonadIO m => FilePath -> [Text] -> m ()
+git repo args = gitOp $ Git.runGitInRepo repo args
+
+gitInit :: MonadIO m => FilePath -> m ()
+gitInit repoDir = gitOp $ Git.runGit ["init", toS repoDir]
+
+gitOp :: Monad m => ExceptT Git.GitError m a -> m ()
 gitOp op = do
   result <- runExceptT op
   case result of
     Left err -> panic $ "git operation failed: " <> show err
-    Right res -> pure res
+    -- Could return result but we don't need to. Just return () to keep tests succinct.
+    Right _ -> pure ()
