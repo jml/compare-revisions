@@ -12,6 +12,9 @@ module CompareRevisions.Git
   , ensureCheckout
   , syncRepo
   , getLog
+  -- * Exported for testing purposes
+  , runGit
+  , runGitInRepo
   ) where
 
 import Protolude

@@ -79,9 +79,11 @@ tests:
     source-dirs: tests
     dependencies:
       - compare-revisions
+      - filepath
       - hspec
       - QuickCheck
       - tasty
       - tasty-hspec
+      - temporary
       - text
       - yaml
