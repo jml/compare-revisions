@@ -82,6 +82,7 @@ tests:
       - filepath
       - hspec
       - QuickCheck
+      - directory
       - tasty
       - tasty-hspec
       - temporary

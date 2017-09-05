@@ -12,7 +12,7 @@ import CompareRevisions.Server.Logging (withLogging, LogLevel(..))
 
 tests :: IO TestTree
 tests = testSpec "Git" $
-  describe "ensureCheckout" $
+  describe "ensureCheckout" $ do
     it "checks out a repository" $ withLogging LevelError $ withSystemTempDirectory "base-directory" $ \baseDir -> do
       let repoDir = baseDir </> "repo"
       gitInit repoDir
@@ -23,7 +23,20 @@ tests = testSpec "Git" $
       gitOp $ Git.ensureCheckout repoDir (Git.Branch "master") workingTreeDir
       contents <- readFile (workingTreeDir </> "hello")
       contents `shouldBe` "dummy content"
-
+    it "updates existing checkouts" $ withLogging LevelError $ withSystemTempDirectory "base-directory" $ \baseDir -> do
+      let repoDir = baseDir </> "repo"
+      gitInit repoDir
+      writeFile (repoDir </> "hello") "dummy content"
+      git repoDir ["add", "hello"]
+      git repoDir ["commit", "-m", "Initial commit"]
+      let workingTreeDir = baseDir </> "working-tree"
+      gitOp $ Git.ensureCheckout repoDir (Git.Branch "master") workingTreeDir
+      writeFile (repoDir </> "hello") "different content"
+      git repoDir ["add", "hello"]
+      git repoDir ["commit", "-m", "Second commit"]
+      gitOp $ Git.ensureCheckout repoDir (Git.Branch "master") workingTreeDir
+      contents <- readFile (workingTreeDir </> "hello")
+      contents `shouldBe` "different content"
 
 git :: MonadIO m => FilePath -> [Text] -> m ()
 git repo args = gitOp $ Git.runGitInRepo repo args

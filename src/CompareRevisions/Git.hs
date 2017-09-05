@@ -188,7 +188,9 @@ ensureCheckout repoPath branch workTreePath = do
            Log.debug' $ "Renaming " <> toS tmpLink <> " to " <> toS linkPath
            rename (base </> "tmp-link") linkPath
            Log.debug' $ "Swapped symlink: " <> toS linkPath <> " now points to " <> toS newPath
-           pure currentPath
+           pure $ case currentPath of
+             Nothing -> Nothing
+             Just p -> Just (base </> p)
 
     getSymlink :: HasCallStack => FilePath -> IO (Maybe FilePath)
     getSymlink path = do

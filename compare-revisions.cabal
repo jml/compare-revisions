@@ -119,6 +119,7 @@ test-suite tasty
     , filepath
     , hspec
     , QuickCheck
+    , directory
     , tasty
     , tasty-hspec
     , temporary
