@@ -164,7 +164,7 @@ ensureCheckout repoPath branch workTreePath = do
         Log.debug' $ "Added work tree at " <> toS path
 
     removeWorkTree path = do
-      liftIO $ unlessM (fileExist path) $ removeDirectoryRecursive path
+      void $ liftIO $ tryJust (guard . isDoesNotExistError) (removeDirectoryRecursive path)
       void $ runGitInRepo repoPath ["worktree", "prune"]
       Log.debug' $ "Removed worktree from " <> toS path
 
