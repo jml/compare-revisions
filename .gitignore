@@ -2,3 +2,4 @@
 /bash_completion.sh
 .output
 .uptodate
+/.dir-locals.el
