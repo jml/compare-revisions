@@ -42,7 +42,10 @@ git :: MonadIO m => FilePath -> [Text] -> m ()
 git repo args = gitOp $ Git.runGitInRepo repo args
 
 gitInit :: MonadIO m => FilePath -> m ()
-gitInit repoDir = gitOp $ Git.runGit ["init", toS repoDir]
+gitInit repoDir = do
+  gitOp $ Git.runGit ["init", toS repoDir]
+  git repoDir ["config", "user.name", "testuser"]
+  git repoDir ["config", "user.email", "testuser@example.com"]
 
 gitOp :: Monad m => ExceptT Git.GitError m a -> m ()
 gitOp op = do
