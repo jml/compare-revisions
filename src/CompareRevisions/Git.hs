@@ -12,6 +12,9 @@ module CompareRevisions.Git
   , ensureCheckout
   , syncRepo
   , getLog
+  -- * Exported for testing purposes
+  , runGit
+  , runGitInRepo
   ) where
 
 import Protolude
@@ -161,7 +164,7 @@ ensureCheckout repoPath branch workTreePath = do
         Log.debug' $ "Added work tree at " <> toS path
 
     removeWorkTree path = do
-      liftIO $ unlessM (fileExist path) $ removeDirectoryRecursive path
+      void $ liftIO $ tryJust (guard . isDoesNotExistError) (removeDirectoryRecursive path)
       void $ runGitInRepo repoPath ["worktree", "prune"]
       Log.debug' $ "Removed worktree from " <> toS path
 
@@ -185,7 +188,9 @@ ensureCheckout repoPath branch workTreePath = do
            Log.debug' $ "Renaming " <> toS tmpLink <> " to " <> toS linkPath
            rename (base </> "tmp-link") linkPath
            Log.debug' $ "Swapped symlink: " <> toS linkPath <> " now points to " <> toS newPath
-           pure currentPath
+           pure $ case currentPath of
+             Nothing -> Nothing
+             Just p -> Just (base </> p)
 
     getSymlink :: HasCallStack => FilePath -> IO (Maybe FilePath)
     getSymlink path = do
