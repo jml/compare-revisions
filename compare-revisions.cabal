@@ -1,6 +1,8 @@
--- This file has been generated from package.yaml by hpack version 0.17.1.
+-- This file has been generated from package.yaml by hpack version 0.20.0.
 --
 -- see: https://github.com/sol/hpack
+--
+-- hash: 177cbb296edf885a8a793635a1d84451b65f52abba84442ebe10bc447596d923
 
 name:           compare-revisions
 version:        0.1.0
@@ -25,11 +27,11 @@ library
   default-extensions: NoImplicitPrelude OverloadedStrings RecordWildCards
   ghc-options: -Wall -Werror
   build-depends:
-      base >= 4.9 && < 5
-    , protolude
+      QuickCheck
     , aeson
     , array
     , attoparsec
+    , base >=4.9 && <5
     , bytestring
     , containers
     , cryptonite
@@ -48,8 +50,8 @@ library
     , process-extras
     , prometheus-client
     , prometheus-metrics-ghc
+    , protolude
     , regex-tdfa
-    , QuickCheck
     , servant
     , servant-lucid
     , servant-server
@@ -58,11 +60,11 @@ library
     , time
     , unix
     , unordered-containers
-    , yaml
     , wai
     , wai-extra
     , wai-middleware-prometheus
     , warp
+    , yaml
   exposed-modules:
       CompareRevisions
       CompareRevisions.API
@@ -77,6 +79,8 @@ library
       CompareRevisions.Server.Instrument
       CompareRevisions.Server.Logging
       CompareRevisions.Validator
+  other-modules:
+      Paths_compare_revisions
   default-language: Haskell2010
 
 executable compare-images
@@ -86,11 +90,13 @@ executable compare-images
   default-extensions: NoImplicitPrelude OverloadedStrings RecordWildCards
   ghc-options: -Wall -Werror
   build-depends:
-      base >= 4.9 && < 5
-    , protolude
+      base >=4.9 && <5
     , compare-revisions
     , containers
     , optparse-applicative
+    , protolude
+  other-modules:
+      Paths_compare_revisions
   default-language: Haskell2010
 
 executable compare-revisions
@@ -100,9 +106,11 @@ executable compare-revisions
   default-extensions: NoImplicitPrelude OverloadedStrings RecordWildCards
   ghc-options: -Wall -Werror -threaded
   build-depends:
-      base >= 4.9 && < 5
-    , protolude
+      base >=4.9 && <5
     , compare-revisions
+    , protolude
+  other-modules:
+      Paths_compare_revisions
   default-language: Haskell2010
 
 test-suite tasty
@@ -113,13 +121,13 @@ test-suite tasty
   default-extensions: NoImplicitPrelude OverloadedStrings RecordWildCards
   ghc-options: -Wall -Werror
   build-depends:
-      base >= 4.9 && < 5
-    , protolude
+      QuickCheck
+    , base >=4.9 && <5
     , compare-revisions
+    , directory
     , filepath
     , hspec
-    , QuickCheck
-    , directory
+    , protolude
     , tasty
     , tasty-hspec
     , temporary
@@ -131,4 +139,5 @@ test-suite tasty
       Git
       Regex
       SCP
+      Paths_compare_revisions
   default-language: Haskell2010
