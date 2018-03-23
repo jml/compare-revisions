@@ -11,7 +11,7 @@ module CompareRevisions.API
   , server
   ) where
 
-import Protolude
+import Protolude hiding (diff)
 
 import Data.Aeson (ToJSON(..))
 import qualified Data.Map as Map
