@@ -42,7 +42,10 @@ api = Proxy
 
 -- | API implementation.
 server :: URI -> Engine.ClusterDiffer -> Server API
-server externalURL clusterDiffer = images clusterDiffer :<|> revisions clusterDiffer :<|> pure (RootPage externalURL)
+server externalURL clusterDiffer
+  = images clusterDiffer
+  :<|> revisions clusterDiffer
+  :<|> pure (RootPage externalURL)
 
 -- | Show how images differ between two environments.
 images :: HasCallStack => Engine.ClusterDiffer -> Handler ImageDiffs
