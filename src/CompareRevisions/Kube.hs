@@ -110,28 +110,6 @@ type ImageName = Text
 type ImageLabel = Text
 
 -- | A set of images is map from names of images to optional labels.
-
--- | Get all the names of images within a JSON value.
-getImageNames :: Value -> [Text]
-getImageNames (Object obj) =
-  image <> rest
-  where
-    image =
-      case HashMap.lookup "image" obj of
-        Just (String name) -> [name]
-        _ -> []
-    rest = concatMap getImageNames obj
-getImageNames (Array arr) = concatMap getImageNames arr
-getImageNames _ = []
-
-
--- | Parse an image name.
-parseImageName :: Text -> Maybe Image
-parseImageName imageName =
-  case splitOn ":" imageName of
-    [name] -> Just (Image name Nothing)
-    [name, label] -> Just (Image name (Just label))
-    _ -> Nothing
 type ImageSet = Map ImageName (Maybe ImageLabel)
 
 -- | Get the images from a Kubernetes object definition.
@@ -144,6 +122,24 @@ getImageSet value =
   where
     images = mapMaybe parseImageName (getImageNames value)
 
+    -- | Get all the names of images within a JSON value.
+    getImageNames (Object obj) =
+      image <> rest
+      where
+        image =
+          case HashMap.lookup "image" obj of
+            Just (String name) -> [name]
+            _ -> []
+        rest = concatMap getImageNames obj
+    getImageNames (Array arr) = concatMap getImageNames arr
+    getImageNames _ = []
+
+    -- | Parse an image name.
+    parseImageName imageName =
+      case splitOn ":" imageName of
+        [name] -> Just (Image name Nothing)
+        [name, label] -> Just (Image name (Just label))
+        _ -> Nothing
 
 -- | Possible difference between image sets.
 data ImageDiff
