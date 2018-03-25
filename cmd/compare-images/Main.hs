@@ -25,7 +25,7 @@ formatDiff = Map.foldMapWithKey formatSingleDiff
     formatSingleDiff kubeObj diffs =
       mconcat ([ formatKubeObject kubeObj, "\n" ] <>
                [ "  " <> formatImageDiff diff <> "\n" | diff <- diffs ]) <> "\n"
-    formatKubeObject (KubeObject namespace kind name) = namespace <> "/" <> name <> " (" <> kind <> ")"
+    formatKubeObject (KubeObject namespace kind name _) = namespace <> "/" <> name <> " (" <> kind <> ")"
 
     formatImage name label = name <> ":" <> fromMaybe "default" label
 
