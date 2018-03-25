@@ -23,7 +23,7 @@ module CompareRevisions.Kube
 import Protolude hiding (diff)
 
 import qualified Data.Aeson as Aeson
-import Data.Aeson (Value(..))
+import Data.Aeson (Value(..), (.:), (.:?))
 import qualified Data.ByteString as ByteString
 import qualified Data.HashMap.Lazy as HashMap
 import qualified Data.Map as Map
@@ -43,6 +43,14 @@ data KubeObject
 
 instance Aeson.ToJSON KubeObject
 
+instance Aeson.FromJSON KubeObject where
+  parseJSON = Aeson.withObject "KubeObject" $ \v -> do
+    kind <- v .: "kind"
+    metadata <- v .: "metadata"
+    name <- metadata .: "name"
+    namespace <- metadata .:? "namespace"
+    pure $ KubeObject (fromMaybe "default" namespace) kind name
+
 -- | A Kubernetes namespace. e.g. "default".
 type Namespace = Text
 
@@ -51,22 +59,6 @@ type Kind = Text
 
 -- | The name of a thing in Kubernetes. e.g. "authfe".
 type Name = Text
-
--- | Given a Kubernetes object definition, return a 'KubeObject'.
-kubeObjectFromValue :: Value -> Maybe KubeObject
-kubeObjectFromValue value = do
-  object <- getObject value
-  kind <- getText =<< HashMap.lookup "kind" object
-  metadata <- getObject =<< HashMap.lookup "metadata" object
-  name <- getText =<< HashMap.lookup "name" metadata
-  let namespace = fromMaybe "default" (getText =<< HashMap.lookup "namespace" metadata)
-  pure (KubeObject namespace kind name)
-  where
-    getText (String text) = Just text
-    getText _ = Nothing
-
-    getObject (Object obj) = Just obj
-    getObject _ = Nothing
 
 -- | The fully qualified name of a Kubernetes object. e.g. "default/authfe".
 namespacedName :: KubeObject -> Text
@@ -189,9 +181,9 @@ loadEnvFromDisk directory = do
   pure (Map.fromList (mapMaybe valueToPair values)) -- ignore yaml that doesn't look like kubeobject
   where
     valueToPair v =
-      case kubeObjectFromValue v of
-        Nothing -> Nothing
-        Just kubeObj -> Just (kubeObj, v)
+      case Aeson.fromJSON v of
+        Aeson.Error _ -> Nothing
+        Aeson.Success kubeObj -> Just (kubeObj, v)
 
 -- | Given a @kubeConfig@ and some @kubeObjects@, fetch their definitions from
 -- a cluster.
