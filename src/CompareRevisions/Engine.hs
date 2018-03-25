@@ -14,10 +14,8 @@ import Protolude hiding (diff, throwE)
 import Control.Concurrent.STM (TVar, newTVarIO, readTVar, writeTVar)
 import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
-import Data.List.NonEmpty (NonEmpty)
 import qualified Data.Map as Map
 import Data.String (String)
-import Data.Yaml (ParseException, decodeFileEither)
 import qualified Prometheus as Prom
 import System.Directory (canonicalizePath)
 import System.FilePath ((</>), takeDirectory)
@@ -29,7 +27,6 @@ import qualified CompareRevisions.Git as Git
 import qualified CompareRevisions.Kube as Kube
 import CompareRevisions.Kube (KubeObject(..), ImageDiff(..))
 import CompareRevisions.Regex (RegexReplace, regexReplace)
-import CompareRevisions.Validator (Validator, runValidator, throwE)
 
 -- TODO: Metrics for comparing revisions.
 
@@ -52,8 +49,7 @@ initMetrics = Metrics
                                                 "Number of config file changes detected"))))
 
 data Error
-  = ParseError ParseException
-  | InvalidConfig (NonEmpty ConfigError)
+  = InvalidConfig Config.Error
   | RegexError RegexReplace Text
   | GitError Git.GitError
   | NoConfigForImage Kube.ImageName
@@ -73,15 +69,18 @@ data ClusterDiffer
   = ClusterDiffer
   { gitRepoDir :: FilePath  -- ^ Path to where we'll put the Git repositories.
   , configFile :: FilePath -- ^ Where the config file lives.
-  , config :: TVar ValidConfig  -- ^ Parsed configuration for what images and repositories to compare.
+  , config :: TVar Config.ValidConfig  -- ^ Parsed configuration for what images and repositories to compare.
   , diff :: TVar (Maybe ClusterDiff)  -- ^ Result of comparing images and revisions.
   , metrics :: Metrics -- ^ Prometheus metrics for cluster differ
   }
 
 -- | Construct a new 'ClusterDiffer', erroring if the configuration file is invalid.
-newClusterDiffer :: (MonadIO m, MonadError Error m) => Config.AppConfig -> m ClusterDiffer
+newClusterDiffer :: Config.AppConfig -> ExceptT Error IO ClusterDiffer
 newClusterDiffer Config.AppConfig{..} = do
-  config <- loadConfigFile configFile
+  possiblyConfig <- runExceptT $ Config.loadConfigFile configFile
+  config <- case possiblyConfig of
+              Left err -> throwError (InvalidConfig err)
+              Right cfg -> pure cfg
   configVar <- liftIO (newTVarIO config)
   diff <- liftIO (newTVarIO empty)
   metrics <- initMetrics
@@ -105,7 +104,7 @@ runClusterDiffer clusterDiffer@ClusterDiffer{..} =
       case result of
         Left err -> Log.warn' $ "Updating cluster diff failed: " <> show err
         Right _ -> pass
-      Duration.sleep . Config.pollInterval . configRepo $ cfg
+      Duration.sleep . Config.pollInterval . Config.configRepo $ cfg
 
 -- | Update the current cluster diff between clusters.
 updateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ()
@@ -118,7 +117,7 @@ configFileChanged _ (Removed _ _) = pass
 configFileChanged _ (Added _ _) = pass
 configFileChanged ClusterDiffer{..} (Modified path _) = do
   Log.log' $ "Config file changed: " <> toS path
-  result <- runExceptT $ loadConfigFile path
+  result <- runExceptT $ Config.loadConfigFile path
   status <- case result of
     Left err -> do
       Log.warn' $ "Failed to parse config file: " <> show err
@@ -146,12 +145,12 @@ calculateClusterDiff ClusterDiffer{..} = do
     -- | Given an image name and a source and target label, return the URL for
     -- the Git repository and the 'git log' needed to get the right revisions.
     lookupImage
-      :: ValidConfig
+      :: Config.ValidConfig
       -> Kube.ImageName
       -> (Kube.ImageLabel, Kube.ImageLabel)
       -> Either Error (Git.URL, LogSpec)
     lookupImage cfg name (srcLabel, tgtLabel) = do
-      Config.ImageConfig{..} <- note (NoConfigForImage name) (Map.lookup name (images cfg))
+      Config.ImageConfig{..} <- note (NoConfigForImage name) (Map.lookup name (Config.images cfg))
       endRev <- labelToRevision imageToRevisionPolicy srcLabel
       startRev <- labelToRevision imageToRevisionPolicy tgtLabel
       pure (gitURL, LogSpec startRev endRev paths)
@@ -210,8 +209,8 @@ syncRepo repoRoot url = do
   where
     repoPath = Config.getRepoPath repoRoot url
 
-compareImages :: MonadIO io => FilePath -> ValidConfig -> ExceptT Error io (Map KubeObject [ImageDiff])
-compareImages gitRepoDir ValidConfig{..} = withExceptT GitError $ do
+compareImages :: MonadIO io => FilePath -> Config.ValidConfig -> ExceptT Error io (Map KubeObject [ImageDiff])
+compareImages gitRepoDir Config.ValidConfig{..} = withExceptT GitError $ do
   let Config.ConfigRepo{..} = configRepo
   repoPath <- syncRepo gitRepoDir url
   Git.ensureCheckout repoPath (fromMaybe (Git.Branch "master") branch) checkoutPath
@@ -226,46 +225,6 @@ labelToRevision :: MonadError Error m => Config.PolicyConfig -> Kube.ImageLabel 
 labelToRevision Config.Identity label = pure . Git.RevSpec $ label
 labelToRevision (Config.Regex regex) label = Git.RevSpec . toS <$> note (RegexError regex label) (regexReplace regex (toS label))
 
-
--- | Information on all the images.
-type ImagePolicies = Map Kube.ImageName (Config.ImageConfig Config.PolicyConfig)
-
--- | Configuration we need to compare a cluster.
-data ValidConfig
-  = ValidConfig
-  { configRepo :: Config.ConfigRepo  -- ^ Details of the repository with the Kubernetes manifests.
-  , images :: ImagePolicies  -- ^ Information about the source code of images.
-  } deriving (Eq, Ord, Show)
-
--- | Turn a user-specified configuration into a guaranteed valid one.
-validateConfig :: Config.Config -> Validator ConfigError ValidConfig
-validateConfig (Config.Config repo images policies) =
-  ValidConfig repo <$> mappedImages
-  where
-    mappedImages = Map.traverseWithKey mapImage images
-    mapImage :: Kube.ImageName -> Config.ImageConfig Config.PolicyName -> Validator ConfigError (Config.ImageConfig Config.PolicyConfig)
-    mapImage imgName img =
-      -- XXX: lenses!
-      let policyName = Config.imageToRevisionPolicy img
-      in case lookupPolicy policyName of
-           Nothing -> throwE (UnknownPolicyName imgName policyName)
-           Just policy -> pure (img { Config.imageToRevisionPolicy = policy })
-    lookupPolicy name = Map.lookup name policies
-
--- | Errors that can occur in syntactically valid configurations.
-data ConfigError
-  = UnknownPolicyName Kube.ImageName Config.PolicyName
-  deriving (Eq, Ord, Show)
-
-loadConfigFile :: (MonadError Error io, MonadIO io) => FilePath -> io ValidConfig
-loadConfigFile path = do
-  config <- liftIO (decodeFileEither path)
-  case config of
-    Left err -> throwError (ParseError err)
-    Right config' ->
-      case runValidator (validateConfig config') of
-        Left err -> throwError (InvalidConfig err)
-        Right result -> pure result
 
 -- | Watch for changes to a single file, performing 'action' when it happens.
 watchFile :: MonadIO io => WatchManager -> FilePath -> (Event -> IO ()) -> io StopListening
