@@ -14,7 +14,6 @@ module CompareRevisions.Kube
   , ImageName
   , ImageLabel
   , getClusterDefinition
-  , getImages
     -- * Image diffs
   , ImageDiff(..)
   , getDifferingImages
@@ -111,7 +110,6 @@ type ImageName = Text
 type ImageLabel = Text
 
 -- | A set of images is map from names of images to optional labels.
-type Images = Map ImageName (Maybe ImageLabel)
 
 -- | Get all the names of images within a JSON value.
 getImageNames :: Value -> [Text]
@@ -134,18 +132,20 @@ parseImageName imageName =
     [name] -> Just (Image name Nothing)
     [name, label] -> Just (Image name (Just label))
     _ -> Nothing
+type ImageSet = Map ImageName (Maybe ImageLabel)
 
 -- | Get the images from a Kubernetes object definition.
 --
 -- Because a single definition can have multiple images, we return a map of
 -- image name to image label, where the label is optional.
-getImages :: Value -> Images
-getImages value =
+getImageSet :: Value -> ImageSet
+getImageSet value =
   Map.fromList [ (name, label) | Image name label <- images ]
   where
     images = mapMaybe parseImageName (getImageNames value)
 
 
+-- | Possible difference between image sets.
 data ImageDiff
   = ImageAdded ImageName (Maybe ImageLabel)
   | ImageChanged ImageName (Maybe ImageLabel) (Maybe ImageLabel)
@@ -158,15 +158,6 @@ getImageName :: ImageDiff -> ImageName
 getImageName (ImageAdded name _) = name
 getImageName (ImageChanged name _ _) = name
 getImageName (ImageRemoved name _) = name
-
-compareImages :: Images -> Images -> [ImageDiff]
-compareImages source target =
-  foreach (Map.toList (mapDiff source target)) $
-  \(name, diff) ->
-    case diff of
-      Added x -> ImageAdded name x
-      Changed x y -> ImageChanged name x y
-      Removed x -> ImageRemoved name x
 
 -- | A difference in a set of values.
 data Diff value
@@ -223,8 +214,8 @@ getDifferingImages :: Env -> Env -> Map KubeObject [ImageDiff]
 getDifferingImages sourceEnv targetEnv =
   Map.mapMaybe getImageDiffs (mapDiff sourceImages targetImages)
   where
-    sourceImages = map getImages sourceEnv
-    targetImages = map getImages targetEnv
+    sourceImages = map getImageSet sourceEnv
+    targetImages = map getImageSet targetEnv
 
     -- If a Kubernetes object was added, we don't really care about the images
     -- within.
@@ -234,6 +225,14 @@ getDifferingImages sourceEnv targetEnv =
     -- If an object was changed, we want to get the changes.
     getImageDiffs (Changed src tgt) = Just (compareImages src tgt)
 
+    compareImages :: ImageSet -> ImageSet -> [ImageDiff]
+    compareImages source target =
+      foreach (Map.toList (mapDiff source target)) $
+      \(name, diff) ->
+        case diff of
+          Added x -> ImageAdded name x
+          Changed x y -> ImageChanged name x y
+          Removed x -> ImageRemoved name x
 
 -- | Breadth-first traversal of @directory@, yielding all files.
 getFiles :: MonadIO io => FilePath -> io [FilePath]
