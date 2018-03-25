@@ -7,7 +7,6 @@ module CompareRevisions.Kube
     -- * Environments
   , Env
   , loadEnvFromDisk
-  , loadEnvFromCluster
   , ProcessError(..)
     -- * Images
   , Image(..)
@@ -22,6 +21,7 @@ module CompareRevisions.Kube
 
 import Protolude hiding (diff)
 
+import Control.Monad (fail)
 import qualified Data.Aeson as Aeson
 import Data.Aeson (Value(..), (.:), (.:?))
 import qualified Data.ByteString as ByteString
@@ -39,17 +39,29 @@ data KubeObject
   = KubeObject { namespace :: Namespace
                , kind :: Kind
                , name :: Name
+                 -- | All the images mentioned in the object definition.
+               , images :: [Image]
                } deriving (Eq, Ord, Show, Generic)
 
 instance Aeson.ToJSON KubeObject
 
 instance Aeson.FromJSON KubeObject where
-  parseJSON = Aeson.withObject "KubeObject" $ \v -> do
-    kind <- v .: "kind"
-    metadata <- v .: "metadata"
+  parseJSON v = Aeson.withObject "KubeObject" (\obj -> do
+    kind <- obj .: "kind"
+    metadata <- obj .: "metadata"
     name <- metadata .: "name"
     namespace <- metadata .:? "namespace"
-    pure $ KubeObject (fromMaybe "default" namespace) kind name
+    images <- traverse Aeson.parseJSON (findAll "image" v)
+    pure $ KubeObject (fromMaybe "default" namespace) kind name images) v
+
+
+-- | Find all instances of a given key in a JSON value.
+findAll :: Text -> Value -> [Value]
+findAll key value =
+  case value of
+    Object obj -> maybeToList (HashMap.lookup key obj) <> concatMap (findAll key) obj
+    Array arr -> concatMap (findAll key) arr
+    _ -> []
 
 -- | A Kubernetes namespace. e.g. "default".
 type Namespace = Text
@@ -98,6 +110,20 @@ data Image
           , label :: Maybe ImageLabel
           } deriving (Eq, Ord, Show)
 
+instance Aeson.ToJSON Image where
+  toJSON (Image name label) = Aeson.toJSON $
+    case label of
+      Nothing -> name
+      Just label' -> name <> ":" <> label'
+
+instance Aeson.FromJSON Image where
+  parseJSON = Aeson.withText "Image" $ \img ->
+    case splitOn ":" img of
+      [name] -> pure (Image name Nothing)
+      [name, label] -> pure (Image name (Just label))
+      _ -> fail "Too many colons in image name"
+
+
 type ImageName = Text
 type ImageLabel = Text
 
@@ -108,30 +134,8 @@ type ImageSet = Map ImageName (Maybe ImageLabel)
 --
 -- Because a single definition can have multiple images, we return a map of
 -- image name to image label, where the label is optional.
-getImageSet :: Value -> ImageSet
-getImageSet value =
-  Map.fromList [ (name, label) | Image name label <- images ]
-  where
-    images = mapMaybe parseImageName (getImageNames value)
-
-    -- | Get all the names of images within a JSON value.
-    getImageNames (Object obj) =
-      image <> rest
-      where
-        image =
-          case HashMap.lookup "image" obj of
-            Just (String name) -> [name]
-            _ -> []
-        rest = concatMap getImageNames obj
-    getImageNames (Array arr) = concatMap getImageNames arr
-    getImageNames _ = []
-
-    -- | Parse an image name.
-    parseImageName imageName =
-      case splitOn ":" imageName of
-        [name] -> Just (Image name Nothing)
-        [name, label] -> Just (Image name (Just label))
-        _ -> Nothing
+getImageSet :: KubeObject -> ImageSet
+getImageSet kubeObj = Map.fromList [ (name, label) | Image name label <- images kubeObj ]
 
 -- | Possible difference between image sets.
 data ImageDiff
@@ -169,32 +173,15 @@ mapDiff source target = Map.fromList (go (Map.toAscList source) (Map.toAscList t
         GT -> (yKey, Removed yValue):go xs ys'
 
 
--- | Here, an environment is a mapping from Kubernetes to their definitions.
-type Env = Map KubeObject Value
+-- | Here, an environment is collection of Kubernetes objects.
+type Env = [KubeObject]
 
 loadEnvFromDisk :: MonadIO m => FilePath -> m Env
 loadEnvFromDisk directory = do
   files <- getFiles directory
   let yamlFiles = [ f | f <- files, takeExtension f == ".yaml" ]
   bytes <- traverse (liftIO . ByteString.readFile) yamlFiles
-  let values = mapMaybe Yaml.decode bytes -- ignore files that don't parse to yaml
-  pure (Map.fromList (mapMaybe valueToPair values)) -- ignore yaml that doesn't look like kubeobject
-  where
-    valueToPair v =
-      case Aeson.fromJSON v of
-        Aeson.Error _ -> Nothing
-        Aeson.Success kubeObj -> Just (kubeObj, v)
-
--- | Given a @kubeConfig@ and some @kubeObjects@, fetch their definitions from
--- a cluster.
---
--- If anything goes wrong running the @kubectl@ process at any time, just give
--- up.
-loadEnvFromCluster :: Maybe FilePath -> [KubeObject] -> ExceptT ProcessError IO Env
-loadEnvFromCluster kubeConfig kubeObjects = do
-  bytes <- traverse (getClusterDefinition kubeConfig) kubeObjects
-  let objToBytes = zip kubeObjects bytes
-  pure (Map.fromList (mapMaybe (traverse (Aeson.decode . toS)) objToBytes))
+  pure $ mapMaybe Yaml.decode bytes -- ignore files that don't parse to yaml
 
 -- | Given two sets of Kubernetes objects, return the images that differ
 -- between them.
@@ -202,8 +189,8 @@ getDifferingImages :: Env -> Env -> Map KubeObject [ImageDiff]
 getDifferingImages sourceEnv targetEnv =
   Map.mapMaybe getImageDiffs (mapDiff sourceImages targetImages)
   where
-    sourceImages = map getImageSet sourceEnv
-    targetImages = map getImageSet targetEnv
+    sourceImages = Map.fromList [(k, getImageSet k) | k <- sourceEnv]
+    targetImages = Map.fromList [(k, getImageSet k) | k <- targetEnv]
 
     -- If a Kubernetes object was added, we don't really care about the images
     -- within.
