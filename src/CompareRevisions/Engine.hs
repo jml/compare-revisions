@@ -135,7 +135,7 @@ calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterD
 calculateClusterDiff ClusterDiffer{gitRepoDir, config} = do
   cfg <- liftIO . atomically . readTVar $ config
   imageDiffs <- compareImages gitRepoDir cfg
-  revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) imageDiffs
+  revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
   pure (ClusterDiff revisionDiffs imageDiffs)
 
 
@@ -144,12 +144,12 @@ compareRevisions
   :: MonadIO m
   => FilePath  -- ^ Path on disk to where all the Git repositories are.
   -> Map Kube.ImageName (Config.ImageConfig Config.PolicyConfig)  -- ^ How we go from the image name to Git.
-  -> Map Kube.KubeObject [Kube.ImageDiff]  -- ^ The differences between images, grouped by Kubernetes object.
+  -> [Kube.ImageDiff]  -- ^ A set of differences between images.
   -> m (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ For each image, either the Git revisions that have changed or an error.
 compareRevisions gitRepoDir imagePolicies imageDiffs  = do
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
-  let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- fold imageDiffs ]
+  let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- imageDiffs ]
   let (withErrors, valid) = Map.mapEitherWithKey lookupImage changedImages
   revisionDiffs <- fold <$> mapWithKeyConcurrently compareManyRevs (groupByRepo valid)
   pure (revisionDiffs <> map Left withErrors)
