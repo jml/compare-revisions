@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NamedFieldPuns #-}
 module CompareRevisions.Engine
   ( Error(..)
   , ClusterDiffer
@@ -131,28 +132,39 @@ data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, 
 
 -- | Calculate a new diff between clusters.
 calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterDiff
-calculateClusterDiff ClusterDiffer{..} = do
+calculateClusterDiff ClusterDiffer{gitRepoDir, config} = do
   cfg <- liftIO . atomically . readTVar $ config
   imageDiffs <- compareImages gitRepoDir cfg
+  revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) imageDiffs
+  pure (ClusterDiff revisionDiffs imageDiffs)
+
+
+-- | Find the Git revisions that lie between different versions of images.
+compareRevisions
+  :: MonadIO m
+  => FilePath  -- ^ Path on disk to where all the Git repositories are.
+  -> Map Kube.ImageName (Config.ImageConfig Config.PolicyConfig)  -- ^ How we go from the image name to Git.
+  -> Map Kube.KubeObject [Kube.ImageDiff]  -- ^ The differences between images, grouped by Kubernetes object.
+  -> m (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ For each image, either the Git revisions that have changed or an error.
+compareRevisions gitRepoDir imagePolicies imageDiffs  = do
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
   let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- fold imageDiffs ]
-  let (withErrors, valid) = Map.mapEitherWithKey (lookupImage cfg) changedImages
+  let (withErrors, valid) = Map.mapEitherWithKey lookupImage changedImages
   revisionDiffs <- fold <$> mapWithKeyConcurrently compareManyRevs (groupByRepo valid)
-  pure (ClusterDiff (revisionDiffs <> map Left withErrors) imageDiffs)
+  pure (revisionDiffs <> map Left withErrors)
   where
     -- | Given an image name and a source and target label, return the URL for
     -- the Git repository and the 'git log' needed to get the right revisions.
     lookupImage
-      :: Config.ValidConfig
-      -> Kube.ImageName
+      :: Kube.ImageName
       -> (Kube.ImageLabel, Kube.ImageLabel)
       -> Either Error (Git.URL, LogSpec)
-    lookupImage cfg name (srcLabel, tgtLabel) = do
-      Config.ImageConfig{..} <- note (NoConfigForImage name) (Map.lookup name (Config.images cfg))
-      endRev <- labelToRevision imageToRevisionPolicy srcLabel
-      startRev <- labelToRevision imageToRevisionPolicy tgtLabel
-      pure (gitURL, LogSpec startRev endRev paths)
+    lookupImage name (srcLabel, tgtLabel) = do
+      imageConfig <- note (NoConfigForImage name) (Map.lookup name imagePolicies)
+      endRev <- labelToRevision (Config.imageToRevisionPolicy imageConfig) srcLabel
+      startRev <- labelToRevision (Config.imageToRevisionPolicy imageConfig) tgtLabel
+      pure (Config.gitURL imageConfig, LogSpec startRev endRev (Config.paths imageConfig))
 
     -- | Given a map of images to Git repositories and log specs, group the
     -- images names first by repository and then by log spec. This helps us
