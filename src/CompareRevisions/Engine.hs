@@ -170,8 +170,8 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
       -> Either Error (Git.URL, LogSpec)
     lookupImage name (srcLabel, tgtLabel) = do
       imageConfig <- note (NoConfigForImage name) (Map.lookup name imagePolicies)
-      endRev <- labelToRevision (Config.imageToRevisionPolicy imageConfig) srcLabel
-      startRev <- labelToRevision (Config.imageToRevisionPolicy imageConfig) tgtLabel
+      endRev <- labelToRevision imageConfig srcLabel
+      startRev <- labelToRevision imageConfig tgtLabel
       pure (Config.gitURL imageConfig, LogSpec startRev endRev (Config.paths imageConfig))
 
     -- | Given a map of images to Git repositories and log specs, group the
@@ -247,10 +247,11 @@ compareImages gitRepoDir Config.ValidConfig{..} = withExceptT GitError $ do
 
 -- | Get the Git revision corresponding to a particular label. Error if we
 -- can't figure it out.
-labelToRevision :: MonadError Error m => Config.PolicyConfig -> Kube.ImageLabel -> m Git.RevSpec
-labelToRevision Config.Identity label = pure . Git.RevSpec $ label
-labelToRevision (Config.Regex regex) label = Git.RevSpec . toS <$> note (RegexError regex label) (regexReplace regex (toS label))
-
+labelToRevision :: MonadError Error m => Config.ImageConfig Config.PolicyConfig -> Kube.ImageLabel -> m Git.RevSpec
+labelToRevision imageConfig label =
+  case Config.imageToRevisionPolicy imageConfig of
+    Config.Identity -> pure . Git.RevSpec $ label
+    Config.Regex regex -> Git.RevSpec . toS <$> note (RegexError regex label) (regexReplace regex (toS label))
 
 -- | Watch for changes to a single file, performing 'action' when it happens.
 watchFile :: MonadIO io => WatchManager -> FilePath -> (Event -> IO ()) -> io StopListening
