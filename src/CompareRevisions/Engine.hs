@@ -139,7 +139,12 @@ calculateClusterDiff ClusterDiffer{gitRepoDir, config} = do
   pure (ClusterDiff revisionDiffs imageDiffs)
 
 
--- | Find the Git revisions that lie between different versions of images.
+-- | Find the Git revisions that lie between many different versions of images.
+--
+-- We compare many image differences at once, because multiple images are
+-- often backed by the same Git repository. Comparing many at once allows us
+-- to sync each Git repository only once, which reduces the work we have to
+-- do.
 compareRevisions
   :: MonadIO m
   => FilePath  -- ^ Path on disk to where all the Git repositories are.
@@ -150,7 +155,10 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
   let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- imageDiffs ]
+  -- For each image, find out the Git repository we need to fetch and the log command we need to run.
+  -- If we can't find this information, collect the image & the error message into withErrors.
   let (withErrors, valid) = Map.mapEitherWithKey lookupImage changedImages
+  -- Sync the repos and fetch logs.
   revisionDiffs <- fold <$> mapWithKeyConcurrently compareManyRevs (groupByRepo valid)
   pure (revisionDiffs <> map Left withErrors)
   where
@@ -179,10 +187,12 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
 
     -- | Given a variety of log specs, get the logs, and map them to the image
     -- name that needs them.
+    --
+    -- The type signature is a little backwards so we can avoid fetching the same log spec many times over.
     compareManyRevs
       :: MonadIO io
-      => Git.URL
-      -> Map LogSpec [Kube.ImageName]
+      => Git.URL  -- ^ The URL of the Git repository we want to inspect.
+      -> Map LogSpec [Kube.ImageName]  -- ^ The revision logs we want, associated with the (possibly many) images that changed in the way that corresponded to these logs.
       -> io (Map Kube.ImageName (Either Error [Git.Revision]))
     compareManyRevs gitURL imagesByLabel = do
       repoPath <- runExceptT $ withExceptT GitError $ syncRepo gitRepoDir gitURL
@@ -208,7 +218,12 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
     newMapWithSameValue keys value = Map.fromList (zip keys (repeat value))
 
 
-mapWithKeyConcurrently :: MonadIO io => (k -> a -> IO b) -> Map k a -> io (Map k b)
+-- | Run a function on every key in a map at the same time.
+mapWithKeyConcurrently
+  :: MonadIO io
+  => (k -> a -> IO b) -- ^ The function to run concurrently. 'k' is the key, and 'a' is the value of that key.
+  -> Map k a  -- ^ The map to run the function on.
+  -> io (Map k b)  -- ^ A new map with the same keys as the first, and values derived from the given function.
 mapWithKeyConcurrently f d = liftIO $ runConcurrently (Map.traverseWithKey (\k v -> Concurrently (f k v)) d)
 
 -- | Sync repository underneath our root directory, returning the path of the
