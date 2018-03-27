@@ -28,7 +28,7 @@ import qualified CompareRevisions.Kube as Kube
 -- | compare-revisions API definition.
 type API
   = "images" :> Get '[HTML, JSON] ImageDiffs
-  :<|> "revisions" :> Get '[HTML] Revisions
+  :<|> "revisions" :> Get '[HTML] RevisionDiffs
   :<|> Get '[HTML] RootPage
 
 -- TODO: Also want to show:
@@ -52,8 +52,10 @@ images :: HasCallStack => Engine.ClusterDiffer -> Handler ImageDiffs
 images = map (ImageDiffs . map Engine.imageDiffs) . Engine.getCurrentDifferences
 
 -- | Show the revisions that are in one environment but not others.
-revisions :: Engine.ClusterDiffer -> Handler Revisions
-revisions = map Revisions . Engine.getCurrentDifferences
+revisions :: Engine.ClusterDiffer -> Handler RevisionDiffs
+revisions differ = do
+  diff <- Engine.getCurrentDifferences differ
+  pure . RevisionDiffs $ Engine.revisionDiffs <$> diff
 
 
 standardPage :: Monad m => Text -> L.HtmlT m () -> L.HtmlT m ()
@@ -128,18 +130,21 @@ instance L.ToHtml ImageDiffs where
       labelCell = L.td_ . L.toHtml . fromMaybe "<no label>"
 
 
-newtype Revisions = Revisions (Maybe Engine.ClusterDiff) deriving (Show)
+-- | The revisions that differ between images.
+--
+-- newtype wrapper exists so we can define HTML & JSON views.
+newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.Error [Git.Revision]))) deriving (Show)
 
 -- TODO: JSON version of Revisions.
 
-instance L.ToHtml Revisions where
+instance L.ToHtml RevisionDiffs where
   toHtmlRaw = L.toHtml
-  toHtml (Revisions clusterDiff) = standardPage "compare-revisions" byImage
+  toHtml (RevisionDiffs clusterDiff) = standardPage "compare-revisions" byImage
     where
       byImage =
         case clusterDiff of
           Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
-          Just diff -> foldMap renderImage (Map.toAscList (Engine.revisionDiffs diff))
+          Just diff -> foldMap renderImage (Map.toAscList diff)
 
       renderImage (name, revs) =
         L.h2_ (L.toHtml name) <> renderLogs revs
