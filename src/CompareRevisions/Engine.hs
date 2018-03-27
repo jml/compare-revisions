@@ -153,7 +153,8 @@ data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, 
 calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterDiff
 calculateClusterDiff ClusterDiffer{gitRepoDir, config} = do
   cfg <- liftIO . atomically . readTVar $ config
-  imageDiffs <- compareImages gitRepoDir cfg
+  let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = Config.configRepo cfg
+  imageDiffs <- compareImages gitRepoDir url branch (Config.path sourceEnv) (Config.path targetEnv)
   revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
   pure (ClusterDiff revisionDiffs imageDiffs)
 
@@ -260,16 +261,18 @@ syncRepo repoRoot url = do
 compareImages
   :: MonadIO io
   => FilePath  -- ^ Where all of the Git repositories are
-  -> Config.ValidConfig  -- ^ The configuration for the entire application
+  -> Git.URL  -- ^ The URL of the repository with the Kubernetes objects (aka the config repo)
+  -> Maybe Git.Branch  -- ^ The branch of the repository with the configuration. If Nothing, assume "master".
+  -> FilePath  -- ^ The path to the source environment (e.g. "k8s/dev")
+  -> FilePath  -- ^ The path to the target environment (e.g. "k8s/prod")
   -> ExceptT Error io (Map Kube.KubeID [Kube.ImageDiff])  -- ^ A map of Kubernetes objects to lists of differences between images.
-compareImages gitRepoDir Config.ValidConfig{configRepo} = withExceptT GitError $ do
-  let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = configRepo
+compareImages gitRepoDir url branch sourceEnv targetEnv = withExceptT GitError $ do
   repoPath <- syncRepo gitRepoDir url
   Git.ensureCheckout repoPath (fromMaybe (Git.Branch "master") branch) checkoutPath
   Kube.getDifferingImages <$> loadEnv sourceEnv <*> loadEnv targetEnv
   where
     checkoutPath = gitRepoDir </> "config-repo"
-    loadEnv env = Kube.loadEnvFromDisk (checkoutPath </> Config.path (env :: Config.Environment))
+    loadEnv envPath = Kube.loadEnvFromDisk (checkoutPath </> envPath)
 
 -- | Get the Git revision corresponding to a particular label. Error if we
 -- can't figure it out.
