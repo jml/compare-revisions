@@ -1,6 +1,11 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
+-- | The heart of compare-revisions
+--
+-- The application's main core is 'ClusterDiffer', which is responsible for
+-- repeatedly updating the 'ClusterDiff'--a static representation of the
+-- differences between two clusters.
 module CompareRevisions.Engine
   ( Error(..)
   , ClusterDiffer
@@ -49,10 +54,15 @@ initMetrics = Metrics
                                                 "comparerevisions_config_file_changes_total"
                                                 "Number of config file changes detected"))))
 
+-- | An error that occurs while comparing repositories
 data Error
-  = InvalidConfig Config.Error
+  = -- | The configuration file was broken somehow.
+    InvalidConfig Config.Error
+    -- | One of the regexes in the config file could not be applied.
   | RegexError RegexReplace Text
+    -- | We could not fetch Git repositories or calculate Git logs.
   | GitError Git.GitError
+    -- | We could not figure out Git information for the given image.
   | NoConfigForImage Kube.ImageName
   deriving (Show)
 
@@ -66,6 +76,12 @@ data ClusterDiff
  deriving (Show)
 
 -- | Core application for comparing revisions of images.
+--
+-- Once run (with 'runClusterDiffer'), it will run in a loop, forever updating
+-- the cluster diff ('updateClusterDiff'). The current diff can be got with
+-- 'getCurrentDifferences'.
+--
+-- Construct with 'newClusterDiffer'.
 data ClusterDiffer
   = ClusterDiffer
   { gitRepoDir :: FilePath  -- ^ Path to where we'll put the Git repositories.
@@ -113,6 +129,7 @@ updateClusterDiff differ@ClusterDiffer{..} = do
   newDiff <- calculateClusterDiff differ
   liftIO . atomically $ writeTVar diff (Just newDiff)
 
+-- | The configuration file has changed.
 configFileChanged :: (Prom.MonadMonitor m, MonadIO m) => ClusterDiffer -> Event -> m ()
 configFileChanged _ (Removed _ _) = pass
 configFileChanged _ (Added _ _) = pass
@@ -129,6 +146,7 @@ configFileChanged ClusterDiffer{..} (Modified path _) = do
   Prom.withLabel status Prom.incCounter . configFileChanges $ metrics
 
 
+-- | A log command to run. Has the start revision, end revision, and an optional set of paths to restrict the log to.
 data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, Ord, Show)
 
 -- | Calculate a new diff between clusters.
@@ -221,6 +239,7 @@ fetchGitLogs gitRepoDir = mapWithKeyConcurrently compareManyRevs
 
 
 -- | Run a function on every key in a map at the same time.
+-- Result is a new map with the same keys but different values.
 mapWithKeyConcurrently
   :: MonadIO io
   => (k -> a -> IO b) -- ^ The function to run concurrently. 'k' is the key, and 'a' is the value of that key.
@@ -237,9 +256,14 @@ syncRepo repoRoot url = do
   where
     repoPath = Config.getRepoPath repoRoot url
 
-compareImages :: MonadIO io => FilePath -> Config.ValidConfig -> ExceptT Error io (Map Kube.KubeObject [Kube.ImageDiff])
-compareImages gitRepoDir Config.ValidConfig{..} = withExceptT GitError $ do
-  let Config.ConfigRepo{..} = configRepo
+-- | Find the images that differ between two Kubernetes environments.
+compareImages
+  :: MonadIO io
+  => FilePath  -- ^ Where all of the Git repositories are
+  -> Config.ValidConfig  -- ^ The configuration for the entire application
+  -> ExceptT Error io (Map Kube.KubeObject [Kube.ImageDiff])  -- ^ A map of Kubernetes objects to lists of differences between images.
+compareImages gitRepoDir Config.ValidConfig{configRepo} = withExceptT GitError $ do
+  let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = configRepo
   repoPath <- syncRepo gitRepoDir url
   Git.ensureCheckout repoPath (fromMaybe (Git.Branch "master") branch) checkoutPath
   Kube.getDifferingImages <$> loadEnv sourceEnv <*> loadEnv targetEnv
