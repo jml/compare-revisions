@@ -29,6 +29,7 @@ import qualified CompareRevisions.Kube as Kube
 type API
   = "images" :> Get '[HTML, JSON] ImageDiffs
   :<|> "revisions" :> Get '[HTML] RevisionDiffs
+  :<|> "changes" :> Get '[HTML] ChangeLog
   :<|> Get '[HTML] RootPage
 
 -- TODO: Also want to show:
@@ -45,6 +46,7 @@ server :: URI -> Engine.ClusterDiffer -> Server API
 server externalURL clusterDiffer
   = images clusterDiffer
   :<|> revisions clusterDiffer
+  :<|> changes clusterDiffer
   :<|> pure (RootPage externalURL)
 
 -- | Show how images differ between two environments.
@@ -56,6 +58,9 @@ revisions :: Engine.ClusterDiffer -> Handler RevisionDiffs
 revisions differ = do
   diff <- Engine.getCurrentDifferences differ
   pure . RevisionDiffs $ Engine.revisionDiffs <$> diff
+
+changes :: Engine.ClusterDiffer -> Handler ChangeLog
+changes _ = pure (ChangeLog ())
 
 
 -- | Wrap an HTML "page" with all of our standard boilerplate.
@@ -83,6 +88,7 @@ instance L.ToHtml RootPage where
       L.ul_ $ do
         L.li_ $ L.a_ [L.href_ (getURL "images")] "Compare images"
         L.li_ $ L.a_ [L.href_ (getURL "revisions")] "Compare revisions"
+        L.li_ $ L.a_ [L.href_ (getURL "changes")] "Changelog"
         L.li_ $ L.a_ [L.href_ (getURL "metrics")] (L.code_ "metrics")
     where
       getURL path =
@@ -172,3 +178,11 @@ instance L.ToHtml RevisionDiffs where
           L.td_ (L.toHtml commitDate) <>
           L.td_ (L.toHtml authorName) <>
           L.td_ (L.toHtml subject)
+
+newtype ChangeLog = ChangeLog ()
+
+instance L.ToHtml ChangeLog where
+  toHtmlRaw = L.toHtml
+  toHtml _ = standardPage "changelog" $ do
+    L.h2_ (L.toHtml ("This week" :: Text))
+    L.h2_ (L.toHtml ("Last week" :: Text))
