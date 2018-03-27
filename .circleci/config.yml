@@ -2,7 +2,8 @@ version: 2
 jobs:
   build:
     docker:
-      - image: fpco/stack-build:lts-9.21
+      # Update stack.yaml when you change this.
+      - image: fpco/stack-build:lts-11.1
     steps:
       - checkout
       - restore_cache:

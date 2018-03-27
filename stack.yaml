@@ -1,3 +1,4 @@
+# Update CircleCI config when you change this.
 resolver: lts-11.1
 
 packages:
