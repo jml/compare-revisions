@@ -4,6 +4,7 @@ module CompareRevisions.Kube
   ( -- * Objects in Kubernetes
     KubeObject(..)
   , namespacedName
+  , getImageSet
     -- * Environments
   , Env
   , loadEnvFromDisk

@@ -9,6 +9,7 @@ import Test.Tasty (defaultMain, testGroup)
 import qualified Config
 import qualified Duration
 import qualified Git
+import qualified Kube
 import qualified Regex
 import qualified SCP
 
@@ -23,4 +24,5 @@ main = do
       , Config.tests
       , Regex.tests
       , Git.tests
+      , Kube.tests
       ]
