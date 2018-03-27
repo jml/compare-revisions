@@ -12,6 +12,7 @@ module CompareRevisions.Engine
 
 import Protolude hiding (diff, throwE)
 
+import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (TVar, newTVarIO, readTVar, writeTVar)
 import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
@@ -157,10 +158,24 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
   let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- imageDiffs ]
   -- For each image, find out the Git repository we need to fetch and the log command we need to run.
   -- If we can't find this information, collect the image & the error message into withErrors.
-  let (withErrors, valid) = Map.mapEitherWithKey lookupImage changedImages
+  let (withErrors, comparableImages) = Map.mapEitherWithKey lookupImage changedImages
+  let repoToLogSpecs = Map.fromListWith (<>) [(gitURL, [logSpec]) | (gitURL, logSpec) <- Map.elems comparableImages ]
   -- Sync the repos and fetch logs.
-  revisionDiffs <- fold <$> mapWithKeyConcurrently compareManyRevs (groupByRepo valid)
-  pure (revisionDiffs <> map Left withErrors)
+  repoToLogs <- fetchGitLogs gitRepoDir repoToLogSpecs
+  -- Re-associate the fetched logs with image names.
+  let reversedIndex = Map.fromListWith (<>) [(v, [k]) | (k, v) <- Map.toList comparableImages]
+  let imageToLogs = flip Map.foldMapWithKey repoToLogs $ \repo logSpecsToLogs ->
+        flip Map.foldMapWithKey logSpecsToLogs $ \logSpec revisions ->
+        case Map.lookup (repo, logSpec) reversedIndex of
+          Nothing ->
+            -- XXX: Technically, this should never happen.
+            -- Other options include panicking here (to catch the bug early),
+            -- or restructuring the code to avoid the bug entirely,
+            -- by passing the images through to `fetchGitLogs` and including them in the result.
+            Map.empty
+          Just indexes -> Map.fromList (zip indexes (repeat revisions))
+  -- Include all the images we couldn't compare due to config defects.
+  pure (imageToLogs <> map Left withErrors)
   where
     -- | Given an image name and a source and target label, return the URL for
     -- the Git repository and the 'git log' needed to get the right revisions.
@@ -174,48 +189,35 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
       startRev <- labelToRevision imageConfig tgtLabel
       pure (Config.gitURL imageConfig, LogSpec startRev endRev (Config.paths imageConfig))
 
-    -- | Given a map of images to Git repositories and log specs, group the
-    -- images names first by repository and then by log spec. This helps us
-    -- run expensive git commands as few times as possible.
-    groupByRepo
-      :: (Ord a, Ord b, Ord c)
-      => Map a (b, c)
-      -> Map b (Map c [a])
-    groupByRepo images =
-      Map.unionsWith (Map.unionWith (<>)) [ Map.singleton gitURL (Map.singleton logSpec [imageName])
-                                          | (imageName, (gitURL, logSpec)) <- Map.toList images  ]
 
+-- | Fetch many Git logs for many repositories.
+--
+-- Fetches the repositories locally and then runs the log commands.
+fetchGitLogs
+  :: MonadIO io
+  => FilePath  -- ^ Directory that contains all the git repositories
+  -> Map Git.URL [LogSpec] -- ^ Map from Git repositories to fetch to the log commands we want to run against each repo
+  -> io (Map Git.URL (Map LogSpec (Either Error [Git.Revision])))  -- ^ For each repo, for each log command, the result of running that command
+fetchGitLogs gitRepoDir = mapWithKeyConcurrently compareManyRevs
+  where
     -- | Given a variety of log specs, get the logs, and map them to the image
     -- name that needs them.
     --
     -- The type signature is a little backwards so we can avoid fetching the same log spec many times over.
     compareManyRevs
-      :: MonadIO io
-      => Git.URL  -- ^ The URL of the Git repository we want to inspect.
-      -> Map LogSpec [Kube.ImageName]  -- ^ The revision logs we want, associated with the (possibly many) images that changed in the way that corresponded to these logs.
-      -> io (Map Kube.ImageName (Either Error [Git.Revision]))
-    compareManyRevs gitURL imagesByLabel = do
-      repoPath <- runExceptT $ withExceptT GitError $ syncRepo gitRepoDir gitURL
-      case repoPath of
-        Left err -> pure $ foldMap (\names -> newMapWithSameValue names (Left err)) imagesByLabel
-        Right path -> fold <$> mapWithKeyConcurrently (compareRevs path) imagesByLabel
+      :: Git.URL  -- ^ The URL of the Git repository we want to inspect.
+      -> [LogSpec]  -- ^ The revision logs we want to run against this repository.
+      -> IO (Map LogSpec (Either Error [Git.Revision]))
+    compareManyRevs gitURL logSpecs = do
+        repoPath <- runExceptT $ withExceptT GitError $ syncRepo gitRepoDir gitURL
+        results <- case repoPath of
+          Left err -> pure $ repeat (Left err)
+          Right path -> mapConcurrently (loadRevs path) logSpecs
+        pure $ Map.fromList (zip logSpecs results)
 
-    -- | Get a single log spec, fanning it out to the image names that need it.
-    compareRevs
-      :: MonadIO io
-      => FilePath
-      -> LogSpec
-      -> [Kube.ImageName]
-      -> io (Map Kube.ImageName (Either Error [Git.Revision]))
-    compareRevs repoPath logSpec imageNames = do
-      revs <- runExceptT (loadRevs repoPath logSpec)
-      pure (newMapWithSameValue imageNames revs)
-
-    loadRevs :: MonadIO io => FilePath -> LogSpec -> ExceptT Error io [Git.Revision]
-    loadRevs repoPath (LogSpec startRev endRev paths) = withExceptT GitError $ Git.getLog repoPath startRev endRev paths
-
-    newMapWithSameValue :: Ord key => [key] -> value -> Map key value
-    newMapWithSameValue keys value = Map.fromList (zip keys (repeat value))
+    -- | Get a single log spec
+    loadRevs :: MonadIO io => FilePath -> LogSpec -> io (Either Error [Git.Revision])
+    loadRevs repoPath (LogSpec startRev endRev paths) = runExceptT $ withExceptT GitError $ Git.getLog repoPath startRev endRev paths
 
 
 -- | Run a function on every key in a map at the same time.
