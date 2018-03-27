@@ -88,16 +88,16 @@ instance L.ToHtml RootPage where
           Just path' -> toS (uriToString identity (path' `relativeTo` externalURL) "")
 
 
-newtype ImageDiffs = ImageDiffs (Maybe (Map Kube.KubeObject [Kube.ImageDiff])) deriving (Eq, Ord, Show, Generic)
+newtype ImageDiffs = ImageDiffs (Maybe (Map Kube.KubeID [Kube.ImageDiff])) deriving (Eq, Ord, Show, Generic)
 
 instance ToJSON ImageDiffs where
   -- I *think* we can't get a default instance because Aeson cowardly refuses
   -- to objects where the keys are objects.
   toJSON (ImageDiffs diffs) = toJSON (Map.fromList . map reshapeKeys . Map.toList <$> diffs)
     where
-      reshapeKeys (kubeObj, diff) =
-        ( Kube.namespacedName kubeObj
-        , Map.fromList [ ("kind" :: Text, toJSON (Kube.kind kubeObj))
+      reshapeKeys (kubeID, diff) =
+        ( Kube.namespacedName kubeID
+        , Map.fromList [ ("kind" :: Text, toJSON (Kube.kind kubeID))
                        , ("diff", toJSON diff)
                        ]
         )

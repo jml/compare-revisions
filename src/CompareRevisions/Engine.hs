@@ -59,7 +59,7 @@ data Error
 data ClusterDiff
  = ClusterDiff
  { revisionDiffs :: Map Kube.ImageName (Either Error [Git.Revision])
- , imageDiffs :: Map Kube.KubeObject [Kube.ImageDiff]
+ , imageDiffs :: Map Kube.KubeID [Kube.ImageDiff]
  }
  deriving (Show)
 
@@ -208,7 +208,7 @@ syncRepo repoRoot url = do
   where
     repoPath = Config.getRepoPath repoRoot url
 
-compareImages :: MonadIO io => FilePath -> Config.ValidConfig -> ExceptT Error io (Map Kube.KubeObject [Kube.ImageDiff])
+compareImages :: MonadIO io => FilePath -> Config.ValidConfig -> ExceptT Error io (Map Kube.KubeID [Kube.ImageDiff])
 compareImages gitRepoDir Config.ValidConfig{..} = withExceptT GitError $ do
   let Config.ConfigRepo{..} = configRepo
   repoPath <- syncRepo gitRepoDir url

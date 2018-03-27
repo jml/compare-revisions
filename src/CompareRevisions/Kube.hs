@@ -2,7 +2,8 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 module CompareRevisions.Kube
   ( -- * Objects in Kubernetes
-    KubeObject(..)
+    KubeID(..)
+  , KubeObject(..)
   , namespacedName
   , getImageSet
     -- * Environments
@@ -35,34 +36,26 @@ import System.FilePath ((</>), takeExtension)
 import System.Posix.Files (getFileStatus, isDirectory)
 import System.Process (readProcessWithExitCode)
 
--- | A Kubernetes object
-data KubeObject
-  = KubeObject { namespace :: Namespace
-               , kind :: Kind
-               , name :: Name
-                 -- | All the images mentioned in the object definition.
-               , images :: [Image]
-               } deriving (Eq, Ord, Show, Generic)
+-- | Identifies a Kubernetes object within a cluster.
+data KubeID
+  = KubeID
+  { namespace :: Namespace
+  , kind :: Kind
+  , name :: Name
+  } deriving (Eq, Ord, Show)
 
-instance Aeson.ToJSON KubeObject
-
-instance Aeson.FromJSON KubeObject where
-  parseJSON v = Aeson.withObject "KubeObject" (\obj -> do
+instance Aeson.FromJSON KubeID where
+  parseJSON = Aeson.withObject "KubeID" (\obj -> do
     kind <- obj .: "kind"
     metadata <- obj .: "metadata"
     name <- metadata .: "name"
     namespace <- metadata .:? "namespace"
-    images <- traverse Aeson.parseJSON (findAll "image" v)
-    pure $ KubeObject (fromMaybe "default" namespace) kind name images) v
+    pure $ KubeID (fromMaybe "default" namespace) kind name)
 
+-- | The fully qualified name of a Kubernetes object. e.g. "default/authfe".
+namespacedName :: KubeID -> Text
+namespacedName KubeID{..} = namespace <> "/" <> name
 
--- | Find all instances of a given key in a JSON value.
-findAll :: Text -> Value -> [Value]
-findAll key value =
-  case value of
-    Object obj -> maybeToList (HashMap.lookup key obj) <> concatMap (findAll key) obj
-    Array arr -> concatMap (findAll key) arr
-    _ -> []
 
 -- | A Kubernetes namespace. e.g. "default".
 type Namespace = Text
@@ -73,9 +66,28 @@ type Kind = Text
 -- | The name of a thing in Kubernetes. e.g. "authfe".
 type Name = Text
 
--- | The fully qualified name of a Kubernetes object. e.g. "default/authfe".
-namespacedName :: KubeObject -> Text
-namespacedName KubeObject{..} = namespace <> "/" <> name
+
+-- | A Kubernetes object
+data KubeObject
+  = KubeObject
+  { -- | The identifier for this object.
+    id :: KubeID
+    -- | All the images mentioned in the object definition.
+  , images :: [Image]
+  } deriving (Eq, Ord, Show)
+
+instance Aeson.FromJSON KubeObject where
+  parseJSON v = KubeObject <$> Aeson.parseJSON v <*> traverse Aeson.parseJSON (findAll "image" v)
+
+
+-- | Find all instances of a given key in a JSON value.
+findAll :: Text -> Value -> [Value]
+findAll key value =
+  case value of
+    Object obj -> maybeToList (HashMap.lookup key obj) <> concatMap (findAll key) obj
+    Array arr -> concatMap (findAll key) arr
+    _ -> []
+
 
 
 data ProcessError = ProcessError ExitCode ByteString deriving (Eq, Show)
@@ -83,8 +95,8 @@ data ProcessError = ProcessError ExitCode ByteString deriving (Eq, Show)
 -- | Load the definition of a Kubernetes object from a cluster.
 --
 -- Uses @kubectl@ under the hood.
-getClusterDefinition :: Maybe FilePath -> KubeObject -> ExceptT ProcessError IO ByteString
-getClusterDefinition kubeConfig KubeObject{..} = do
+getClusterDefinition :: Maybe FilePath -> KubeID -> ExceptT ProcessError IO ByteString
+getClusterDefinition kubeConfig KubeID{..} = do
   (exitCode, out, err) <- lift $ readProcessWithExitCode "kubectl" kubectlArgs ""
   case exitCode of
     ExitSuccess -> pure (toS out)
@@ -186,12 +198,12 @@ loadEnvFromDisk directory = do
 
 -- | Given two sets of Kubernetes objects, return the images that differ
 -- between them.
-getDifferingImages :: Env -> Env -> Map KubeObject [ImageDiff]
+getDifferingImages :: Env -> Env -> Map KubeID [ImageDiff]
 getDifferingImages sourceEnv targetEnv =
   Map.mapMaybe getImageDiffs (mapDiff sourceImages targetImages)
   where
-    sourceImages = Map.fromList [(k, getImageSet k) | k <- sourceEnv]
-    targetImages = Map.fromList [(k, getImageSet k) | k <- targetEnv]
+    sourceImages = Map.fromList [(id k, getImageSet k) | k <- sourceEnv]
+    targetImages = Map.fromList [(id k, getImageSet k) | k <- targetEnv]
 
     -- If a Kubernetes object was added, we don't really care about the images
     -- within.
