@@ -58,6 +58,7 @@ revisions differ = do
   pure . RevisionDiffs $ Engine.revisionDiffs <$> diff
 
 
+-- | Wrap an HTML "page" with all of our standard boilerplate.
 standardPage :: Monad m => Text -> L.HtmlT m () -> L.HtmlT m ()
 standardPage title content =
   L.doctypehtml_ $ do
@@ -89,7 +90,8 @@ instance L.ToHtml RootPage where
           Nothing -> panic $ toS path <> " is not a valid relative URI"
           Just path' -> toS (uriToString identity (path' `relativeTo` externalURL) "")
 
-
+-- | The images that differ between Kubernetes objects.
+-- Newtype wrapper is to let us provide nice HTML.
 newtype ImageDiffs = ImageDiffs (Maybe (Map Kube.KubeID [Kube.ImageDiff])) deriving (Eq, Ord, Show, Generic)
 
 instance ToJSON ImageDiffs where
