@@ -1,23 +1,33 @@
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleContexts #-}
 -- | Configuration for compare-revisions.
+--
+-- There are three "config" structures in this file, which makes it a little
+-- confusing:
+--
+-- - 'AppConfig' -- the flags passed on the command line
+-- - 'Config' -- an intermediate structure outlining the schema of the config file
+-- - 'ValidConfig' -- the post-processed config file, guaranteed to be valid.
 module CompareRevisions.Config
   (
   -- * YAML files
-    Config(..)
-  , ConfigRepo(..)
+  ConfigRepo(..)
   , Environment(..)
   , ImageConfig(..)
   , PolicyConfig(..)
-  , PolicyName
+  -- ** Valid configuration from YAML files
+  , Error(..)
+  , ValidConfig(..)
+  , loadConfigFile
+  , validateConfig
   -- * Command line
   , AppConfig(..)
   , flags
   , getRepoPath
   ) where
 
-import Protolude hiding (Identity, hash, option)
+import Protolude hiding (Identity, hash, option, throwE)
 
 import Control.Monad.Fail (fail)
 import Crypto.Hash (hash, Digest, SHA256)
@@ -32,7 +42,9 @@ import Data.Aeson
   )
 import Data.Aeson.Types (Options(..), SumEncoding(..), camelTo2, typeMismatch)
 import qualified Data.Char as Char
+import qualified Data.Map as Map
 import qualified Data.Text as Text
+import Data.Yaml (ParseException, decodeFileEither)
 import Network.URI (URI, parseAbsoluteURI)
 import Options.Applicative (Parser, eitherReader, help, long, option, str)
 import System.FilePath ((</>))
@@ -41,6 +53,7 @@ import CompareRevisions.Duration (Duration)
 import qualified CompareRevisions.Git as Git
 import CompareRevisions.Kube (ImageName)
 import CompareRevisions.Regex (RegexReplace)
+import CompareRevisions.Validator (Validator, runValidator, throwE)
 
 
 -- | Configuration specific to compare-revisions.
@@ -106,8 +119,6 @@ instance ToJSON Config where
 instance FromJSON Config where
   parseJSON = genericParseJSON configOptions
 
-type PolicyName = Text
-
 -- | The repository with the Kubernetes manifests in it.
 -- TODO: Credentials are missing
 data ConfigRepo
@@ -155,6 +166,9 @@ instance ToJSON policy => ToJSON (ImageConfig policy) where
 instance FromJSON policy => FromJSON (ImageConfig policy) where
   parseJSON = genericParseJSON imageConfigOptions
 
+-- | The name of a policy for deriving Git revisions from image labels.
+type PolicyName = Text
+
 data PolicyConfig
   = Regex RegexReplace
   | Identity
@@ -179,3 +193,50 @@ instance FromJSON PolicyConfig where
       x -> typeMismatch "Policy type name" x
   parseJSON x = typeMismatch "Policy config" x
 
+
+-- | Information on all the images.
+type ImagePolicies = Map ImageName (ImageConfig PolicyConfig)
+
+-- | Configuration we need to compare a cluster.
+data ValidConfig
+  = ValidConfig
+  { configRepo :: ConfigRepo  -- ^ Details of the repository with the Kubernetes manifests.
+  , images :: ImagePolicies  -- ^ Information about the source code of images.
+  } deriving (Eq, Ord, Show)
+
+-- | Turn a user-specified configuration into a guaranteed valid one.
+validateConfig :: Config -> Either (NonEmpty ConfigError) ValidConfig
+validateConfig Config { configRepo = repo, images = images, revisionPolicies = policies } =
+  runValidator (ValidConfig repo <$> mappedImages)
+  where
+    mappedImages = Map.traverseWithKey mapImage images
+    mapImage :: ImageName -> ImageConfig PolicyName -> Validator ConfigError (ImageConfig PolicyConfig)
+    mapImage imgName img =
+      -- XXX: lenses!
+      let policyName = imageToRevisionPolicy img
+      in case lookupPolicy policyName of
+           Nothing -> throwE (UnknownPolicyName imgName policyName)
+           Just policy -> pure (img { imageToRevisionPolicy = policy })
+    lookupPolicy name = Map.lookup name policies
+
+
+-- | Errors that can occur in configs
+data Error
+  = ParseError ParseException
+  | InvalidConfig (NonEmpty ConfigError)
+  deriving (Show)
+
+-- | Errors that can occur in syntactically valid configurations.
+data ConfigError
+  = UnknownPolicyName ImageName PolicyName
+  deriving (Eq, Ord, Show)
+
+loadConfigFile :: (MonadIO m, MonadError Error m) => FilePath -> m ValidConfig
+loadConfigFile path = do
+  config <- liftIO (decodeFileEither path)
+  case config of
+    Left err -> throwError (ParseError err)
+    Right config' ->
+      case validateConfig config' of
+        Left err -> throwError (InvalidConfig err)
+        Right result -> pure result

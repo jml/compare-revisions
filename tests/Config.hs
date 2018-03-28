@@ -18,7 +18,9 @@ tests :: IO TestTree
 tests = testSpec "Config" $ do
   describe "Parser" $
     it "Parses the example in the README" $
-      Yaml.decodeEither (toS readmeExample) `shouldBe` Right parsedReadmeExample
+      case Yaml.decodeEither (toS readmeExample) of
+        Left err -> panic (show err)
+        Right parsed -> Config.validateConfig parsed `shouldBe` Right parsedReadmeExample
 
   describe "Revision policies" $
     it "Parses the example in the README" $ do
@@ -54,9 +56,9 @@ readmeExample = Text.unlines
   , "    output: \\1"
   ]
 
-parsedReadmeExample :: Config.Config
+parsedReadmeExample :: Config.ValidConfig
 parsedReadmeExample =
-  Config.Config repo images policies
+  Config.ValidConfig repo images
   where
     repo = Config.ConfigRepo
            { url = Git.SCP (AuthRemoteFile "git" "github.com" "my-org/service-config.git")
@@ -73,9 +75,7 @@ parsedReadmeExample =
            }
     images = [ ("weaveworks/cortex", Config.ImageConfig
                                      { gitURL = Git.SCP (AuthRemoteFile "git" "github.com" "weaveworks/cortex.git")
-                                     , imageToRevisionPolicy = "weaveworks"
+                                     , imageToRevisionPolicy = Config.Regex (fromJust (Regex.makeRegexReplace "^master-([0-9a-f]+)$" "\\1"))
                                      , paths = Nothing
                                      })
              ]
-    policies = [ ("weaveworks", Config.Regex (fromJust (Regex.makeRegexReplace "^master-([0-9a-f]+)$" "\\1")))
-               ]
