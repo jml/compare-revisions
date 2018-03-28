@@ -25,7 +25,6 @@ import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Duration as Duration
 import qualified CompareRevisions.Git as Git
 import qualified CompareRevisions.Kube as Kube
-import CompareRevisions.Kube (KubeObject(..), ImageDiff(..))
 import CompareRevisions.Regex (RegexReplace, regexReplace)
 
 -- TODO: Metrics for comparing revisions.
@@ -60,7 +59,7 @@ data Error
 data ClusterDiff
  = ClusterDiff
  { revisionDiffs :: Map Kube.ImageName (Either Error [Git.Revision])
- , imageDiffs :: Map KubeObject [ImageDiff]
+ , imageDiffs :: Map Kube.KubeID [Kube.ImageDiff]
  }
  deriving (Show)
 
@@ -209,7 +208,7 @@ syncRepo repoRoot url = do
   where
     repoPath = Config.getRepoPath repoRoot url
 
-compareImages :: MonadIO io => FilePath -> Config.ValidConfig -> ExceptT Error io (Map KubeObject [ImageDiff])
+compareImages :: MonadIO io => FilePath -> Config.ValidConfig -> ExceptT Error io (Map Kube.KubeID [Kube.ImageDiff])
 compareImages gitRepoDir Config.ValidConfig{..} = withExceptT GitError $ do
   let Config.ConfigRepo{..} = configRepo
   repoPath <- syncRepo gitRepoDir url

@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 177cbb296edf885a8a793635a1d84451b65f52abba84442ebe10bc447596d923
+-- hash: b4af1259f284c1b81088e0dcaa964ae1faaf196359a0199e84f7db3660e1bfbe
 
 name:           compare-revisions
 version:        0.1.0
@@ -124,6 +124,7 @@ test-suite tasty
       QuickCheck
     , base >=4.9 && <5
     , compare-revisions
+    , containers
     , directory
     , filepath
     , hspec
@@ -137,6 +138,7 @@ test-suite tasty
       Config
       Duration
       Git
+      Kube
       Regex
       SCP
       Paths_compare_revisions

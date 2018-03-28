@@ -5,7 +5,7 @@ import Protolude hiding (diff)
 import qualified Data.Map as Map
 import Options.Applicative
 import CompareRevisions.Kube
-  ( KubeObject(..)
+  ( KubeID(..)
   , ImageDiff(..)
   , loadEnvFromDisk
   , getDifferingImages
@@ -19,13 +19,13 @@ options = Config
   <$> argument str (metavar "SOURCE" <> help "The environment with the newer images.")
   <*> argument str (metavar "DESTINATION" <> help "The environment with the older images.")
 
-formatDiff :: Map KubeObject [ImageDiff] -> Text
+formatDiff :: Map KubeID [ImageDiff] -> Text
 formatDiff = Map.foldMapWithKey formatSingleDiff
   where
     formatSingleDiff kubeObj diffs =
       mconcat ([ formatKubeObject kubeObj, "\n" ] <>
                [ "  " <> formatImageDiff diff <> "\n" | diff <- diffs ]) <> "\n"
-    formatKubeObject (KubeObject namespace kind name) = namespace <> "/" <> name <> " (" <> kind <> ")"
+    formatKubeObject (KubeID namespace kind name) = namespace <> "/" <> name <> " (" <> kind <> ")"
 
     formatImage name label = name <> ":" <> fromMaybe "default" label
 
