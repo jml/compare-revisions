@@ -15,12 +15,15 @@ import Protolude hiding (diff)
 
 import Data.Aeson (ToJSON(..))
 import qualified Data.Map as Map
+import qualified Data.Time as Time
 import qualified Lucid as L
 import Network.URI (URI, parseRelativeReference, relativeTo, uriToString)
 import Servant (Server, Handler)
-import Servant.API (Get, JSON, (:<|>)(..), (:>))
+import Servant.API (Capture, Get, JSON, QueryParam, (:<|>)(..), (:>))
 import Servant.HTML.Lucid (HTML)
+import Servant.Server (ServantErr(..), err404)
 
+import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Engine as Engine
 import qualified CompareRevisions.Git as Git
 import qualified CompareRevisions.Kube as Kube
@@ -29,7 +32,7 @@ import qualified CompareRevisions.Kube as Kube
 type API
   = "images" :> Get '[HTML, JSON] ImageDiffs
   :<|> "revisions" :> Get '[HTML] RevisionDiffs
-  :<|> "changes" :> Get '[HTML] ChangeLog
+  :<|> Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] ChangeLog
   :<|> Get '[HTML] RootPage
 
 -- TODO: Also want to show:
@@ -47,7 +50,12 @@ server externalURL clusterDiffer
   = images clusterDiffer
   :<|> revisions clusterDiffer
   :<|> changes clusterDiffer
-  :<|> pure (RootPage externalURL)
+  :<|> rootPage externalURL clusterDiffer
+
+rootPage :: HasCallStack => URI -> Engine.ClusterDiffer -> Handler RootPage
+rootPage externalURL differ = do
+  envs <- findEnvironments <$> Engine.getConfig differ
+  pure (RootPage externalURL envs)
 
 -- | Show how images differ between two environments.
 images :: HasCallStack => Engine.ClusterDiffer -> Handler ImageDiffs
@@ -59,8 +67,38 @@ revisions differ = do
   diff <- Engine.getCurrentDifferences differ
   pure . RevisionDiffs $ Engine.revisionDiffs <$> diff
 
-changes :: Engine.ClusterDiffer -> Handler ChangeLog
-changes _ = pure (ChangeLog ())
+-- | Show recent changes to a particular cluster.
+--
+-- Probably want this to take the following parameters:
+--   - the cluster to look at
+--   - the start date for changes (and default to something like 2 weeks ago)
+--   - the end date for changes (defaulting to 'now')
+--
+-- Initial version should not take end date (YAGNI).
+--
+-- Then use that to:
+--   - find the configuration for the cluster
+--   - check out a version for the start date
+--   - (check out a version for the end date)
+--   - Use Kube.getDifferingImages to find the images that differ
+--   - Use Engine.compareRevisions to find the git revisions
+--   - Organize this information reverse chronologically,
+--     probably not even grouped be images.
+changes :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> Handler ChangeLog
+changes differ env _start = do
+  envs <- findEnvironments <$> Engine.getConfig differ
+  _envPath <- case Map.lookup env envs of
+    Nothing -> throwError $ err404 { errBody = "No such environment: " <> toS env }
+    Just envPath -> pure envPath
+  pure (ChangeLog env)
+
+
+-- | Find all of the environments in our configuration.
+findEnvironments :: Config.ValidConfig -> Map Config.EnvironmentName FilePath
+findEnvironments cfg = Map.fromList [(Config.name env, Config.path env) | env <- envs]
+  where
+    envs = [Config.sourceEnv repo, Config.targetEnv repo]
+    repo = Config.configRepo cfg
 
 
 -- | Wrap an HTML "page" with all of our standard boilerplate.
@@ -78,17 +116,22 @@ standardPage title content =
     sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
 
 -- | Represents the root page of the service.
-newtype RootPage = RootPage URI
+data RootPage = RootPage URI (Map Config.EnvironmentName FilePath) deriving (Eq, Ord, Show)
 
 -- | Very simple root HTML page.
 instance L.ToHtml RootPage where
   toHtmlRaw = L.toHtml
-  toHtml (RootPage externalURL) =
-    standardPage "compare-revisions" $
+  toHtml (RootPage externalURL envs) =
+    standardPage "compare-revisions" $ do
+      L.h2_ "Between environments"
       L.ul_ $ do
-        L.li_ $ L.a_ [L.href_ (getURL "images")] "Compare images"
-        L.li_ $ L.a_ [L.href_ (getURL "revisions")] "Compare revisions"
-        L.li_ $ L.a_ [L.href_ (getURL "changes")] "Changelog"
+        L.li_ $ L.a_ [L.href_ (getURL "images")] "Images"
+        L.li_ $ L.a_ [L.href_ (getURL "revisions")] "Revisions"
+      L.h2_ "Within environments"
+      L.ul_ $ sequence_ [ L.li_ $ L.a_ [L.href_ (getURL (toS env <> "/changes"))] (L.toHtml env)
+                        | env <- Map.keys envs ]
+      L.h2_ "Ops"
+      L.ul_ $
         L.li_ $ L.a_ [L.href_ (getURL "metrics")] (L.code_ "metrics")
     where
       getURL path =
@@ -179,10 +222,10 @@ instance L.ToHtml RevisionDiffs where
           L.td_ (L.toHtml authorName) <>
           L.td_ (L.toHtml subject)
 
-newtype ChangeLog = ChangeLog ()
+newtype ChangeLog = ChangeLog Config.EnvironmentName deriving (Eq, Ord, Show)
 
 instance L.ToHtml ChangeLog where
   toHtmlRaw = L.toHtml
-  toHtml _ = standardPage "changelog" $ do
+  toHtml (ChangeLog env) = standardPage (env <> " :: changelog") $ do
     L.h2_ (L.toHtml ("This week" :: Text))
     L.h2_ (L.toHtml ("Last week" :: Text))

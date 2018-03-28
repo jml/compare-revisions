@@ -11,6 +11,7 @@ module CompareRevisions.Engine
   , ClusterDiffer
   , newClusterDiffer
   , runClusterDiffer
+  , getConfig
   , ClusterDiff(..)
   , getCurrentDifferences
   ) where
