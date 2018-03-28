@@ -88,7 +88,7 @@ revisions differ = do
 changes :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> Handler ChangeLog
 changes differ env start' = do
   envs <- findEnvironments <$> Engine.getConfig differ
-  _envPath <- case Map.lookup env envs of
+  envPath <- case Map.lookup env envs of
     Nothing -> throwError $ err404 { errBody = "No such environment: " <> toS env }
     Just envPath -> pure envPath
   start <- case start' of
@@ -98,7 +98,8 @@ changes differ env start' = do
       -- TODO: Would like to pick the last Sunday that gives us two whole weeks.
       pure (Time.addDays (-14) today)
     Just start'' -> pure start''
-  pure (ChangeLog env start)
+  changelog <- liftIO $ Engine.loadChanges differ envPath start
+  pure (ChangeLog env start changelog)
 
 
 -- | Find all of the environments in our configuration.
@@ -234,13 +235,31 @@ data ChangeLog
   = ChangeLog
   { environment :: Config.EnvironmentName
   , startDate :: Time.Day
-  } deriving (Eq, Ord, Show)
+  , changelog :: Map Kube.ImageName (Either Engine.Error [Git.Revision])
+  } deriving (Show)
 
 instance L.ToHtml ChangeLog where
   toHtmlRaw = L.toHtml
-  toHtml ChangeLog{environment, startDate} = standardPage (environment <> " :: changelog") $ do
+  toHtml ChangeLog{environment, startDate, changelog} = standardPage (environment <> " :: changelog") $ do
     L.p_ ("Since " <> L.toHtml (formatDate startDate))
+    L.table_ $ do
+      L.tr_ $ do
+        L.th_ "Date"
+        L.th_ "Subject"
+        L.th_ "Author"
+      foldMap renderRevision (sortOn Git.commitDate (Map.keys (flattenChangelog changelog)))
     L.h2_ (L.toHtml ("This week" :: Text))
     L.h2_ (L.toHtml ("Last week" :: Text))
     where
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
+      renderRevision Git.Revision{commitDate, authorName, subject} =
+        L.tr_ $
+          L.td_ (L.toHtml commitDate) <>
+          L.td_ (L.toHtml subject) <>
+          L.td_ (L.toHtml authorName)
+
+flattenChangelog
+  :: Map Kube.ImageName (Either Engine.Error [Git.Revision])
+  -> Map Git.Revision [Kube.ImageName]
+flattenChangelog changelog =
+  Map.fromListWith (<>) [(rev, [img]) | (img, Right revs) <- Map.toList changelog, rev <- revs]

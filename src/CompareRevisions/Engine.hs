@@ -12,6 +12,7 @@ module CompareRevisions.Engine
   , newClusterDiffer
   , runClusterDiffer
   , getConfig
+  , loadChanges
   , ClusterDiff(..)
   , getCurrentDifferences
   ) where
@@ -24,6 +25,7 @@ import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
 import qualified Data.Map as Map
 import Data.String (String)
+import qualified Data.Time as Time
 import qualified Prometheus as Prom
 import System.Directory (canonicalizePath)
 import System.FilePath ((</>), takeDirectory)
@@ -278,6 +280,17 @@ compareImages gitRepoDir url branch sourceEnv targetEnv = withExceptT GitError $
   where
     checkoutPath = gitRepoDir </> "config-repo"
     loadEnv envPath = Kube.loadEnvFromDisk (checkoutPath </> envPath)
+
+
+-- | Find all the Git commits that have contributed to the change in a cluster
+-- over a time-span.
+loadChanges
+  :: ClusterDiffer  -- ^ Where the magic happens
+  -> FilePath  -- ^ Path to the Kubernetes YAMLs within the configuration repository
+  -> Time.Day  -- ^ The start date for Git commits. Commits earlier than 00:00Z on this date will be excluded.
+  -> IO (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ The changes, grouped by image.
+loadChanges _differ _envPath _start = pure Map.empty
+
 
 -- | Get the Git revision corresponding to a particular label. Error if we
 -- can't figure it out.
