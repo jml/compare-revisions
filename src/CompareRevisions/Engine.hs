@@ -103,6 +103,10 @@ newClusterDiffer Config.AppConfig{..} = do
   metrics <- initMetrics
   pure $ ClusterDiffer gitRepoDir configFile configVar diff metrics
 
+-- | Get the configuration of the differ.
+getConfig :: MonadIO io => ClusterDiffer -> io Config.ValidConfig
+getConfig ClusterDiffer{config} = liftIO . atomically . readTVar $ config
+
 -- | Get the most recently calculated differences from 'ClusterDiffer'.
 getCurrentDifferences :: MonadIO m => ClusterDiffer -> m (Maybe ClusterDiff)
 getCurrentDifferences = liftIO . atomically . readTVar . diff
@@ -151,8 +155,8 @@ data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, 
 
 -- | Calculate a new diff between clusters.
 calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterDiff
-calculateClusterDiff ClusterDiffer{gitRepoDir, config} = do
-  cfg <- liftIO . atomically . readTVar $ config
+calculateClusterDiff differ@ClusterDiffer{gitRepoDir} = do
+  cfg <- getConfig differ
   let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = Config.configRepo cfg
   imageDiffs <- compareImages gitRepoDir url branch (Config.path sourceEnv) (Config.path targetEnv)
   revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
