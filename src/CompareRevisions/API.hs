@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TypeOperators #-}
 
 -- | API definition for compare-revisions.
@@ -85,12 +86,19 @@ revisions differ = do
 --   - Organize this information reverse chronologically,
 --     probably not even grouped be images.
 changes :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> Handler ChangeLog
-changes differ env _start = do
+changes differ env start' = do
   envs <- findEnvironments <$> Engine.getConfig differ
   _envPath <- case Map.lookup env envs of
     Nothing -> throwError $ err404 { errBody = "No such environment: " <> toS env }
     Just envPath -> pure envPath
-  pure (ChangeLog env)
+  start <- case start' of
+    Nothing -> do
+      now <- liftIO Time.getCurrentTime
+      let today = Time.utctDay now
+      -- TODO: Would like to pick the last Sunday that gives us two whole weeks.
+      pure (Time.addDays (-14) today)
+    Just start'' -> pure start''
+  pure (ChangeLog env start)
 
 
 -- | Find all of the environments in our configuration.
@@ -222,10 +230,17 @@ instance L.ToHtml RevisionDiffs where
           L.td_ (L.toHtml authorName) <>
           L.td_ (L.toHtml subject)
 
-newtype ChangeLog = ChangeLog Config.EnvironmentName deriving (Eq, Ord, Show)
+data ChangeLog
+  = ChangeLog
+  { environment :: Config.EnvironmentName
+  , startDate :: Time.Day
+  } deriving (Eq, Ord, Show)
 
 instance L.ToHtml ChangeLog where
   toHtmlRaw = L.toHtml
-  toHtml (ChangeLog env) = standardPage (env <> " :: changelog") $ do
+  toHtml ChangeLog{environment, startDate} = standardPage (environment <> " :: changelog") $ do
+    L.p_ ("Since " <> L.toHtml (formatDate startDate))
     L.h2_ (L.toHtml ("This week" :: Text))
     L.h2_ (L.toHtml ("Last week" :: Text))
+    where
+      formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
