@@ -284,12 +284,37 @@ compareImages gitRepoDir url branch sourceEnv targetEnv = withExceptT GitError $
 
 -- | Find all the Git commits that have contributed to the change in a cluster
 -- over a time-span.
+--
+-- XXX: jml hates this name
 loadChanges
   :: ClusterDiffer  -- ^ Where the magic happens
   -> FilePath  -- ^ Path to the Kubernetes YAMLs within the configuration repository
   -> Time.Day  -- ^ The start date for Git commits. Commits earlier than 00:00Z on this date will be excluded.
-  -> IO (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ The changes, grouped by image.
-loadChanges _differ _envPath _start = pure Map.empty
+  -> ExceptT Error IO (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ The changes, grouped by image.
+loadChanges differ@ClusterDiffer{gitRepoDir} envPath start = withExceptT GitError $ do
+  cfg <- getConfig differ
+  let Config.ConfigRepo{url, branch} = Config.configRepo cfg
+  repoPath <- syncRepo gitRepoDir url
+  let branch' = fromMaybe (Git.Branch "master") branch
+  Git.ensureCheckout repoPath branch' checkoutPath
+  startHash' <- Git.firstCommitSince repoPath branch' (Time.UTCTime start (Time.secondsToDiffTime 0))
+  case startHash' of
+    Nothing -> pure Map.empty -- XXX: Maybe throw an error instead?
+    Just startHash@(Git.Hash startHashText) -> do
+      let startCheckoutPath = gitRepoDir </> ("checkout-" <> toS startHashText)
+      Git.ensureCheckout' repoPath startHash startCheckoutPath
+      -- We put current first (where 'dev' goes in compare-images) and start
+      -- second (analogous to 'prod'). That's because 'dev' is the future and
+      -- 'prod' is the past.
+      imageDiffs <- Kube.getDifferingImages
+                    <$> Kube.loadEnvFromDisk (checkoutPath </> envPath)
+                    <*> Kube.loadEnvFromDisk (startCheckoutPath </> envPath)
+      compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
+  where
+    -- XXX: Not sure how I feel about re-using the checkout that we're using
+    -- for compare-images etc.
+    checkoutPath = gitRepoDir </> "config-repo"
+
 
 
 -- | Get the Git revision corresponding to a particular label. Error if we

@@ -6,12 +6,15 @@ module CompareRevisions.Git
   ( URL(..)
   , toText
   , Branch(..)
+  , Hash(..)
   , RevSpec(..)
   , Revision(..)
   , GitError(..)
   , ensureCheckout
+  , ensureCheckout'
   , syncRepo
   , getLog
+  , firstCommitSince
   -- * Exported for testing purposes
   , runGit
   , runGitInRepo
@@ -22,6 +25,7 @@ import Protolude hiding (hash)
 import qualified Control.Logging as Log
 import qualified Data.ByteString.Char8 as ByteString
 import qualified Data.Text as Text
+import qualified Data.Time as Time
 import Data.Aeson (FromJSON(..), ToJSON(..), withText)
 import qualified Network.URI
 import System.Directory (removeDirectoryRecursive)
@@ -208,7 +212,24 @@ ensureCheckout' repoPath (Hash hashText) workTreePath = do
       result <- tryJust (guard . isDoesNotExistError) (readSymbolicLink path)
       pure $ hush result
 
-
+-- | Find the first commit made since the given time, if there is such a commit.
+firstCommitSince
+  :: (HasCallStack, MonadError GitError m, MonadIO m)
+  => FilePath  -- ^ Path to the repository
+  -> Branch -- ^ The branch to list
+  -> Time.UTCTime  -- ^ Earliest possible time of the commit.
+  -> m (Maybe Hash)  -- ^ The hash of the commit.
+firstCommitSince repoPath (Branch branch) time = do
+  -- This approach means that if 'time' is a long time in the past, we'll have
+  -- to process a *lot* of revisions. If this turns out to be a problem in
+  -- practice, could either come up with a cleverer way of querying Git
+  -- (preferred) or add a --before clause and exponentially back off until we
+  -- reach a time greater than now.
+  let command = ["rev-list", "--first-parent", "--after=" <> isoTime, branch]
+  (out, _) <- runGitInRepo repoPath command
+  pure $ Hash . toS <$> lastMay (ByteString.lines out)
+  where
+    isoTime = toS $ Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat (Just "%H:%M:%S")) time
 
 getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> Maybe [FilePath] -> m [Revision]
 getLog repoPath (RevSpec start) (RevSpec end) paths = do

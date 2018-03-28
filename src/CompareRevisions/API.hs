@@ -22,7 +22,7 @@ import Network.URI (URI, parseRelativeReference, relativeTo, uriToString)
 import Servant (Server, Handler)
 import Servant.API (Capture, Get, JSON, QueryParam, (:<|>)(..), (:>))
 import Servant.HTML.Lucid (HTML)
-import Servant.Server (ServantErr(..), err404)
+import Servant.Server (ServantErr(..), err404, err500)
 
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Engine as Engine
@@ -98,8 +98,10 @@ changes differ env start' = do
       -- TODO: Would like to pick the last Sunday that gives us two whole weeks.
       pure (Time.addDays (-14) today)
     Just start'' -> pure start''
-  changelog <- liftIO $ Engine.loadChanges differ envPath start
-  pure (ChangeLog env start changelog)
+  changelog' <- liftIO . runExceptT $ Engine.loadChanges differ envPath start
+  case changelog' of
+    Left err -> throwError $ err500 { errBody = "Could not load config repo: " <> show err }
+    Right changelog -> pure (ChangeLog env start changelog)
 
 
 -- | Find all of the environments in our configuration.
