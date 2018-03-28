@@ -17,7 +17,7 @@ module CompareRevisions.Git
   , runGitInRepo
   ) where
 
-import Protolude
+import Protolude hiding (hash)
 
 import qualified Control.Logging as Log
 import qualified Data.ByteString.Char8 as ByteString

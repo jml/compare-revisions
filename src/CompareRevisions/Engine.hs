@@ -9,7 +9,7 @@ module CompareRevisions.Engine
   , getCurrentDifferences
   ) where
 
-import Protolude
+import Protolude hiding (diff, throwE)
 
 import Control.Concurrent.STM (TVar, newTVarIO, readTVar, writeTVar)
 import qualified Control.Logging as Log

@@ -17,7 +17,7 @@ module CompareRevisions.Config
   , getRepoPath
   ) where
 
-import Protolude hiding (Identity)
+import Protolude hiding (Identity, hash, option)
 
 import Control.Monad.Fail (fail)
 import Crypto.Hash (hash, Digest, SHA256)

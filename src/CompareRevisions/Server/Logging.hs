@@ -8,7 +8,7 @@ module CompareRevisions.Server.Logging
   , error'
   ) where
 
-import Protolude
+import Protolude hiding (option)
 
 import Control.Logging
   ( LogLevel(..)

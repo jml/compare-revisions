@@ -21,7 +21,7 @@ module CompareRevisions.Kube
   , getImageName
   ) where
 
-import Protolude
+import Protolude hiding (diff)
 
 import qualified Data.Aeson as Aeson
 import Data.Aeson (Value(..))

@@ -5,10 +5,10 @@ module CompareRevisions.Server
   , run
   ) where
 
-import Protolude
+import Protolude hiding (option)
 
 import qualified Control.Logging as Log
-import GHC.Stats (getGCStatsEnabled)
+import GHC.Stats (getRTSStatsEnabled)
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Middleware.RequestLogger as RL
 import Options.Applicative
@@ -67,7 +67,7 @@ run :: Config -> Application -> IO ()
 run config@Config{..} app = do
   requests <- Prom.registerIO requestDuration
   when enableGhcMetrics $
-    do statsEnabled <- getGCStatsEnabled
+    do statsEnabled <- getRTSStatsEnabled
        unless statsEnabled $
          Log.warn' "Exporting GHC metrics but GC stats not enabled. Re-run with +RTS -T."
        void $ Prom.register Prom.ghcMetrics

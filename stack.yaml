@@ -1,4 +1,5 @@
-resolver: lts-9.21
+# Update CircleCI config when you change this.
+resolver: lts-11.1
 
 packages:
   - .

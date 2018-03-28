@@ -10,8 +10,9 @@ module CompareRevisions.Validator
   , mapErrors
   ) where
 
-import Protolude
+import Protolude hiding (throwE, (<>))
 
+import Data.Semigroup ((<>))
 import Data.List.NonEmpty (NonEmpty(..))
 
 -- | A 'Validator' is a value that can either be valid or have a non-empty
