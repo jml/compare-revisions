@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: b4af1259f284c1b81088e0dcaa964ae1faaf196359a0199e84f7db3660e1bfbe
+-- hash: 92991c49e4ae99bda52e1c345323c21f1a7bdd9985fa7d1f2437c58349a650cb
 
 name:           compare-revisions
 version:        0.1.0
@@ -30,6 +30,7 @@ library
       QuickCheck
     , aeson
     , array
+    , async
     , attoparsec
     , base >=4.9 && <5
     , bytestring

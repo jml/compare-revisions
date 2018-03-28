@@ -1,5 +1,11 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NamedFieldPuns #-}
+-- | The heart of compare-revisions
+--
+-- The application's main core is 'ClusterDiffer', which is responsible for
+-- repeatedly updating the 'ClusterDiff'--a static representation of the
+-- differences between two clusters.
 module CompareRevisions.Engine
   ( Error(..)
   , ClusterDiffer
@@ -11,6 +17,7 @@ module CompareRevisions.Engine
 
 import Protolude hiding (diff, throwE)
 
+import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (TVar, newTVarIO, readTVar, writeTVar)
 import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
@@ -47,10 +54,15 @@ initMetrics = Metrics
                                                 "comparerevisions_config_file_changes_total"
                                                 "Number of config file changes detected"))))
 
+-- | An error that occurs while comparing repositories
 data Error
-  = InvalidConfig Config.Error
+  = -- | The configuration file was broken somehow.
+    InvalidConfig Config.Error
+    -- | One of the regexes in the config file could not be applied.
   | RegexError RegexReplace Text
+    -- | We could not fetch Git repositories or calculate Git logs.
   | GitError Git.GitError
+    -- | We could not figure out Git information for the given image.
   | NoConfigForImage Kube.ImageName
   deriving (Show)
 
@@ -64,6 +76,12 @@ data ClusterDiff
  deriving (Show)
 
 -- | Core application for comparing revisions of images.
+--
+-- Once run (with 'runClusterDiffer'), it will run in a loop, forever updating
+-- the cluster diff ('updateClusterDiff'). The current diff can be got with
+-- 'getCurrentDifferences'.
+--
+-- Construct with 'newClusterDiffer'.
 data ClusterDiffer
   = ClusterDiffer
   { gitRepoDir :: FilePath  -- ^ Path to where we'll put the Git repositories.
@@ -111,6 +129,7 @@ updateClusterDiff differ@ClusterDiffer{..} = do
   newDiff <- calculateClusterDiff differ
   liftIO . atomically $ writeTVar diff (Just newDiff)
 
+-- | The configuration file has changed.
 configFileChanged :: (Prom.MonadMonitor m, MonadIO m) => ClusterDiffer -> Event -> m ()
 configFileChanged _ (Removed _ _) = pass
 configFileChanged _ (Added _ _) = pass
@@ -127,76 +146,106 @@ configFileChanged ClusterDiffer{..} (Modified path _) = do
   Prom.withLabel status Prom.incCounter . configFileChanges $ metrics
 
 
+-- | A log command to run. Has the start revision, end revision, and an optional set of paths to restrict the log to.
 data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, Ord, Show)
 
 -- | Calculate a new diff between clusters.
 calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterDiff
-calculateClusterDiff ClusterDiffer{..} = do
+calculateClusterDiff ClusterDiffer{gitRepoDir, config} = do
   cfg <- liftIO . atomically . readTVar $ config
-  imageDiffs <- compareImages gitRepoDir cfg
+  let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = Config.configRepo cfg
+  imageDiffs <- compareImages gitRepoDir url branch (Config.path sourceEnv) (Config.path targetEnv)
+  revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
+  pure (ClusterDiff revisionDiffs imageDiffs)
+
+
+-- | Find the Git revisions that lie between many different versions of images.
+--
+-- We compare many image differences at once, because multiple images are
+-- often backed by the same Git repository. Comparing many at once allows us
+-- to sync each Git repository only once, which reduces the work we have to
+-- do.
+compareRevisions
+  :: MonadIO m
+  => FilePath  -- ^ Path on disk to where all the Git repositories are.
+  -> Map Kube.ImageName (Config.ImageConfig Config.PolicyConfig)  -- ^ How we go from the image name to Git.
+  -> [Kube.ImageDiff]  -- ^ A set of differences between images.
+  -> m (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ For each image, either the Git revisions that have changed or an error.
+compareRevisions gitRepoDir imagePolicies imageDiffs  = do
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
-  let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- fold imageDiffs ]
-  let (withErrors, valid) = Map.mapEitherWithKey (lookupImage cfg) changedImages
-  revisionDiffs <- fold <$> mapWithKeyConcurrently compareManyRevs (groupByRepo valid)
-  pure (ClusterDiff (revisionDiffs <> map Left withErrors) imageDiffs)
+  let changedImages = Map.fromList [ (name, (src, tgt)) | Kube.ImageChanged name (Just src) (Just tgt) <- imageDiffs ]
+  -- For each image, find out the Git repository we need to fetch and the log command we need to run.
+  -- If we can't find this information, collect the image & the error message into withErrors.
+  let (withErrors, comparableImages) = Map.mapEitherWithKey lookupImage changedImages
+  let repoToLogSpecs = Map.fromListWith (<>) [(gitURL, [logSpec]) | (gitURL, logSpec) <- Map.elems comparableImages ]
+  -- Sync the repos and fetch logs.
+  repoToLogs <- fetchGitLogs gitRepoDir repoToLogSpecs
+  -- Re-associate the fetched logs with image names.
+  let reversedIndex = Map.fromListWith (<>) [(v, [k]) | (k, v) <- Map.toList comparableImages]
+  let imageToLogs = flip Map.foldMapWithKey repoToLogs $ \repo logSpecsToLogs ->
+        flip Map.foldMapWithKey logSpecsToLogs $ \logSpec revisions ->
+        case Map.lookup (repo, logSpec) reversedIndex of
+          Nothing ->
+            -- XXX: Technically, this should never happen.
+            -- Other options include panicking here (to catch the bug early),
+            -- or restructuring the code to avoid the bug entirely,
+            -- by passing the images through to `fetchGitLogs` and including them in the result.
+            Map.empty
+          Just indexes -> Map.fromList (zip indexes (repeat revisions))
+  -- Include all the images we couldn't compare due to config defects.
+  pure (imageToLogs <> map Left withErrors)
   where
     -- | Given an image name and a source and target label, return the URL for
     -- the Git repository and the 'git log' needed to get the right revisions.
     lookupImage
-      :: Config.ValidConfig
-      -> Kube.ImageName
+      :: Kube.ImageName
       -> (Kube.ImageLabel, Kube.ImageLabel)
       -> Either Error (Git.URL, LogSpec)
-    lookupImage cfg name (srcLabel, tgtLabel) = do
-      Config.ImageConfig{..} <- note (NoConfigForImage name) (Map.lookup name (Config.images cfg))
-      endRev <- labelToRevision imageToRevisionPolicy srcLabel
-      startRev <- labelToRevision imageToRevisionPolicy tgtLabel
-      pure (gitURL, LogSpec startRev endRev paths)
+    lookupImage name (srcLabel, tgtLabel) = do
+      imageConfig <- note (NoConfigForImage name) (Map.lookup name imagePolicies)
+      endRev <- labelToRevision imageConfig srcLabel
+      startRev <- labelToRevision imageConfig tgtLabel
+      pure (Config.gitURL imageConfig, LogSpec startRev endRev (Config.paths imageConfig))
 
-    -- | Given a map of images to Git repositories and log specs, group the
-    -- images names first by repository and then by log spec. This helps us
-    -- run expensive git commands as few times as possible.
-    groupByRepo
-      :: (Ord a, Ord b, Ord c)
-      => Map a (b, c)
-      -> Map b (Map c [a])
-    groupByRepo images =
-      Map.unionsWith (Map.unionWith (<>)) [ Map.singleton gitURL (Map.singleton logSpec [imageName])
-                                          | (imageName, (gitURL, logSpec)) <- Map.toList images  ]
 
+-- | Fetch many Git logs for many repositories.
+--
+-- Fetches the repositories locally and then runs the log commands.
+fetchGitLogs
+  :: MonadIO io
+  => FilePath  -- ^ Directory that contains all the git repositories
+  -> Map Git.URL [LogSpec] -- ^ Map from Git repositories to fetch to the log commands we want to run against each repo
+  -> io (Map Git.URL (Map LogSpec (Either Error [Git.Revision])))  -- ^ For each repo, for each log command, the result of running that command
+fetchGitLogs gitRepoDir = mapWithKeyConcurrently compareManyRevs
+  where
     -- | Given a variety of log specs, get the logs, and map them to the image
     -- name that needs them.
+    --
+    -- The type signature is a little backwards so we can avoid fetching the same log spec many times over.
     compareManyRevs
-      :: MonadIO io
-      => Git.URL
-      -> Map LogSpec [Kube.ImageName]
-      -> io (Map Kube.ImageName (Either Error [Git.Revision]))
-    compareManyRevs gitURL imagesByLabel = do
-      repoPath <- runExceptT $ withExceptT GitError $ syncRepo gitRepoDir gitURL
-      case repoPath of
-        Left err -> pure $ foldMap (\names -> newMapWithSameValue names (Left err)) imagesByLabel
-        Right path -> fold <$> mapWithKeyConcurrently (compareRevs path) imagesByLabel
+      :: Git.URL  -- ^ The URL of the Git repository we want to inspect.
+      -> [LogSpec]  -- ^ The revision logs we want to run against this repository.
+      -> IO (Map LogSpec (Either Error [Git.Revision]))
+    compareManyRevs gitURL logSpecs = do
+        repoPath <- runExceptT $ withExceptT GitError $ syncRepo gitRepoDir gitURL
+        results <- case repoPath of
+          Left err -> pure $ repeat (Left err)
+          Right path -> mapConcurrently (loadRevs path) logSpecs
+        pure $ Map.fromList (zip logSpecs results)
 
-    -- | Get a single log spec, fanning it out to the image names that need it.
-    compareRevs
-      :: MonadIO io
-      => FilePath
-      -> LogSpec
-      -> [Kube.ImageName]
-      -> io (Map Kube.ImageName (Either Error [Git.Revision]))
-    compareRevs repoPath logSpec imageNames = do
-      revs <- runExceptT (loadRevs repoPath logSpec)
-      pure (newMapWithSameValue imageNames revs)
-
-    loadRevs :: MonadIO io => FilePath -> LogSpec -> ExceptT Error io [Git.Revision]
-    loadRevs repoPath (LogSpec startRev endRev paths) = withExceptT GitError $ Git.getLog repoPath startRev endRev paths
-
-    newMapWithSameValue :: Ord key => [key] -> value -> Map key value
-    newMapWithSameValue keys value = Map.fromList (zip keys (repeat value))
+    -- | Get a single log spec
+    loadRevs :: MonadIO io => FilePath -> LogSpec -> io (Either Error [Git.Revision])
+    loadRevs repoPath (LogSpec startRev endRev paths) = runExceptT $ withExceptT GitError $ Git.getLog repoPath startRev endRev paths
 
 
-mapWithKeyConcurrently :: MonadIO io => (k -> a -> IO b) -> Map k a -> io (Map k b)
+-- | Run a function on every key in a map at the same time.
+-- Result is a new map with the same keys but different values.
+mapWithKeyConcurrently
+  :: MonadIO io
+  => (k -> a -> IO b) -- ^ The function to run concurrently. 'k' is the key, and 'a' is the value of that key.
+  -> Map k a  -- ^ The map to run the function on.
+  -> io (Map k b)  -- ^ A new map with the same keys as the first, and values derived from the given function.
 mapWithKeyConcurrently f d = liftIO $ runConcurrently (Map.traverseWithKey (\k v -> Concurrently (f k v)) d)
 
 -- | Sync repository underneath our root directory, returning the path of the
@@ -208,22 +257,30 @@ syncRepo repoRoot url = do
   where
     repoPath = Config.getRepoPath repoRoot url
 
-compareImages :: MonadIO io => FilePath -> Config.ValidConfig -> ExceptT Error io (Map Kube.KubeID [Kube.ImageDiff])
-compareImages gitRepoDir Config.ValidConfig{..} = withExceptT GitError $ do
-  let Config.ConfigRepo{..} = configRepo
+-- | Find the images that differ between two Kubernetes environments.
+compareImages
+  :: MonadIO io
+  => FilePath  -- ^ Where all of the Git repositories are
+  -> Git.URL  -- ^ The URL of the repository with the Kubernetes objects (aka the config repo)
+  -> Maybe Git.Branch  -- ^ The branch of the repository with the configuration. If Nothing, assume "master".
+  -> FilePath  -- ^ The path to the source environment (e.g. "k8s/dev")
+  -> FilePath  -- ^ The path to the target environment (e.g. "k8s/prod")
+  -> ExceptT Error io (Map Kube.KubeID [Kube.ImageDiff])  -- ^ A map of Kubernetes objects to lists of differences between images.
+compareImages gitRepoDir url branch sourceEnv targetEnv = withExceptT GitError $ do
   repoPath <- syncRepo gitRepoDir url
   Git.ensureCheckout repoPath (fromMaybe (Git.Branch "master") branch) checkoutPath
   Kube.getDifferingImages <$> loadEnv sourceEnv <*> loadEnv targetEnv
   where
     checkoutPath = gitRepoDir </> "config-repo"
-    loadEnv env = Kube.loadEnvFromDisk (checkoutPath </> Config.path (env :: Config.Environment))
+    loadEnv envPath = Kube.loadEnvFromDisk (checkoutPath </> envPath)
 
 -- | Get the Git revision corresponding to a particular label. Error if we
 -- can't figure it out.
-labelToRevision :: MonadError Error m => Config.PolicyConfig -> Kube.ImageLabel -> m Git.RevSpec
-labelToRevision Config.Identity label = pure . Git.RevSpec $ label
-labelToRevision (Config.Regex regex) label = Git.RevSpec . toS <$> note (RegexError regex label) (regexReplace regex (toS label))
-
+labelToRevision :: MonadError Error m => Config.ImageConfig Config.PolicyConfig -> Kube.ImageLabel -> m Git.RevSpec
+labelToRevision imageConfig label =
+  case Config.imageToRevisionPolicy imageConfig of
+    Config.Identity -> pure . Git.RevSpec $ label
+    Config.Regex regex -> Git.RevSpec . toS <$> note (RegexError regex label) (regexReplace regex (toS label))
 
 -- | Watch for changes to a single file, performing 'action' when it happens.
 watchFile :: MonadIO io => WatchManager -> FilePath -> (Event -> IO ()) -> io StopListening
