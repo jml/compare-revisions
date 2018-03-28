@@ -121,14 +121,7 @@ fetchRepo :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> m (
 fetchRepo repoPath = void $ runGitInRepo repoPath ["fetch", "--all", "--prune"]
 
 
--- | Ensure a checkout exists at the given path.
---
--- Assumes that:
---   * we have write access to the repo (we create checkouts under there)
---   * we are responsible for managing the checkout path
---
--- Checkout path is a symlink to the canonical location of the working tree,
--- which is updated to point at a new directory if they are out of date.
+-- | Ensure a checkout of a branch exists at the given path.
 ensureCheckout
   :: (MonadError GitError m, MonadIO m, HasCallStack)
   => FilePath -- ^ Path to a Git repository on disk
@@ -137,9 +130,31 @@ ensureCheckout
   -> m ()
 ensureCheckout repoPath branch workTreePath = do
   Log.debug' $ "Ensuring checkout of " <> toS repoPath <> " to " <> show branch <> " at " <> toS workTreePath
-  hash@(Hash hashText) <- hashForBranchHead branch
+  hash <- hashForBranchHead branch
+  ensureCheckout' repoPath hash workTreePath
+  where
+    -- | Get the SHA-1 of the head of a branch.
+    hashForBranchHead :: (HasCallStack, MonadError GitError m, MonadIO m) => Branch -> m Hash
+    hashForBranchHead (Branch b) = Hash . Text.strip . toS . fst <$> runGitInRepo repoPath ["rev-list", "-n1", b]
+
+
+-- | Ensure a checkout of the given revision exists at the given path.
+--
+-- Assumes that:
+--   * we have write access to the repo (we create checkouts under there)
+--   * we are responsible for managing the checkout path
+--
+-- Checkout path is a symlink to the canonical location of the working tree,
+-- which is updated to point at a new directory if they are out of date.
+ensureCheckout'
+  :: (MonadError GitError m, MonadIO m, HasCallStack)
+  => FilePath -- ^ Path to a Git repository on disk
+  -> Hash -- ^ The Git SHA1 that we want to check out
+  -> FilePath -- ^ The path to the checkout
+  -> m ()
+ensureCheckout' repoPath (Hash hashText) workTreePath = do
   let canonicalTree = repoPath </> ("rev-" <> toS hashText)
-  addWorkTree canonicalTree hash
+  addWorkTree canonicalTree
   oldTree <- liftIO $ swapSymlink workTreePath canonicalTree
   case oldTree of
     Nothing -> pass
@@ -150,17 +165,13 @@ ensureCheckout repoPath branch workTreePath = do
           removeWorkTree oldTreePath
 
   where
-    -- | Get the SHA-1 of the head of a branch.
-    hashForBranchHead :: (HasCallStack, MonadError GitError m, MonadIO m) => Branch -> m Hash
-    hashForBranchHead (Branch b) = Hash . Text.strip . toS . fst <$> runGitInRepo repoPath ["rev-list", "-n1", b]
-
     -- | Checkout a branch of a repo to a given path.
-    addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()
-    addWorkTree path (Hash hash) =
+    addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> m ()
+    addWorkTree path =
       -- TODO: Doesn't handle case where path exists but is a file (not a
       -- directory), or doesn't contain a valid worktree.
       unlessM (liftIO $ fileExist path) $ do
-        void $ runGitInRepo repoPath ["worktree", "add", toS path, hash]
+        void $ runGitInRepo repoPath ["worktree", "add", toS path, hashText]
         Log.debug' $ "Added work tree at " <> toS path
 
     removeWorkTree path = do
@@ -196,6 +207,8 @@ ensureCheckout repoPath branch workTreePath = do
     getSymlink path = do
       result <- tryJust (guard . isDoesNotExistError) (readSymbolicLink path)
       pure $ hush result
+
+
 
 getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> Maybe [FilePath] -> m [Revision]
 getLog repoPath (RevSpec start) (RevSpec end) paths = do
