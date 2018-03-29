@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -16,9 +17,10 @@ import Protolude hiding (diff)
 
 import Data.Aeson (ToJSON(..))
 import qualified Data.Map as Map
+import qualified Data.Text as Text
 import qualified Data.Time as Time
 import qualified Lucid as L
-import Network.URI (URI, parseRelativeReference, relativeTo, uriToString)
+import Network.URI (URI(..), parseRelativeReference, relativeTo, uriToString)
 import Servant (Server, Handler)
 import Servant.API (Capture, Get, JSON, QueryParam, (:<|>)(..), (:>))
 import Servant.HTML.Lucid (HTML)
@@ -195,7 +197,7 @@ instance L.ToHtml ImageDiffs where
 -- | The revisions that differ between images.
 --
 -- newtype wrapper exists so we can define HTML & JSON views.
-newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.Error [Git.Revision]))) deriving (Show)
+newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision])))) deriving (Show)
 
 -- TODO: JSON version of Revisions.
 
@@ -215,9 +217,9 @@ instance L.ToHtml RevisionDiffs where
         L.p_ (L.toHtml ("No repository configured for image" :: Text))
       renderLogs (Left err) =
         L.pre_ (L.toHtml (show err :: Text))
-      renderLogs (Right []) =
+      renderLogs (Right (_, [])) =
         L.p_ (L.toHtml ("No revisions in range" :: Text))
-      renderLogs (Right revs) =
+      renderLogs (Right (_, revs)) =
         L.table_ $ do
           L.tr_ $ do
             L.th_ "SHA-1"
@@ -237,7 +239,7 @@ data ChangeLog
   = ChangeLog
   { environment :: Config.EnvironmentName
   , startDate :: Time.Day
-  , changelog :: Map Kube.ImageName (Either Engine.Error [Git.Revision])
+  , changelog :: Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision]))
   } deriving (Show)
 
 instance L.ToHtml ChangeLog where
@@ -247,21 +249,30 @@ instance L.ToHtml ChangeLog where
     L.table_ $ do
       L.tr_ $ do
         L.th_ "Date"
+        L.th_ "Repo"
         L.th_ "Subject"
         L.th_ "Author"
-      foldMap renderRevision (reverse (sortOn Git.commitDate (Map.keys (flattenChangelog changelog))))
+      foldMap renderRevision (reverse (sortOn (Git.commitDate . snd) (Map.keys (flattenChangelog changelog))))
     L.h2_ (L.toHtml ("This week" :: Text))
     L.h2_ (L.toHtml ("Last week" :: Text))
     where
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
-      renderRevision Git.Revision{commitDate, authorName, subject} =
+      renderRevision (uri, Git.Revision{commitDate, authorName, subject}) =
         L.tr_ $
           L.td_ (L.toHtml commitDate) <>
+          L.td_ (renderRepoURL uri) <>
           L.td_ (L.toHtml subject) <>
           L.td_ (L.toHtml authorName)
+      renderRepoURL (Git.URI uri) =
+        let path = toS $ uriPath uri
+            withoutGit = fromMaybe path (Text.stripSuffix ".git" path)
+            cleanPath = fromMaybe withoutGit (Text.stripPrefix "/weaveworks/" withoutGit)
+        in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] (L.toHtml cleanPath)
+      renderRepoURL uri@(Git.SCP _) = L.toHtml (Git.toText uri)
+
 
 flattenChangelog
-  :: Map Kube.ImageName (Either Engine.Error [Git.Revision])
-  -> Map Git.Revision [Kube.ImageName]
+  :: Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision]))
+  -> Map (Git.URL, Git.Revision) [Kube.ImageName]
 flattenChangelog changelog =
-  Map.fromListWith (<>) [(rev, [img]) | (img, Right revs) <- Map.toList changelog, rev <- revs]
+  Map.fromListWith (<>) [((uri, rev), [img]) | (img, Right (uri, revs)) <- Map.toList changelog, rev <- revs]

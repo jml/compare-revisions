@@ -73,7 +73,7 @@ data Error
 -- | The differences between two clusters at a point in time.
 data ClusterDiff
  = ClusterDiff
- { revisionDiffs :: Map Kube.ImageName (Either Error [Git.Revision])
+ { revisionDiffs :: Map Kube.ImageName (Either Error (Git.URL, [Git.Revision]))
  , imageDiffs :: Map Kube.KubeID [Kube.ImageDiff]
  }
  deriving (Show)
@@ -177,7 +177,7 @@ compareRevisions
   => FilePath  -- ^ Path on disk to where all the Git repositories are.
   -> Map Kube.ImageName (Config.ImageConfig Config.PolicyConfig)  -- ^ How we go from the image name to Git.
   -> [Kube.ImageDiff]  -- ^ A set of differences between images.
-  -> m (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ For each image, either the Git revisions that have changed or an error.
+  -> m (Map Kube.ImageName (Either Error (Git.URL, [Git.Revision])))  -- ^ For each image, either the Git revisions that have changed or an error.
 compareRevisions gitRepoDir imagePolicies imageDiffs  = do
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
@@ -199,7 +199,7 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
             -- or restructuring the code to avoid the bug entirely,
             -- by passing the images through to `fetchGitLogs` and including them in the result.
             Map.empty
-          Just indexes -> Map.fromList (zip indexes (repeat revisions))
+          Just indexes -> Map.fromList (zip indexes (repeat ((\revs -> (repo, revs)) <$> revisions)))
   -- Include all the images we couldn't compare due to config defects.
   pure (imageToLogs <> map Left withErrors)
   where
@@ -290,7 +290,7 @@ loadChanges
   :: ClusterDiffer  -- ^ Where the magic happens
   -> FilePath  -- ^ Path to the Kubernetes YAMLs within the configuration repository
   -> Time.Day  -- ^ The start date for Git commits. Commits earlier than 00:00Z on this date will be excluded.
-  -> ExceptT Error IO (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ The changes, grouped by image.
+  -> ExceptT Error IO (Map Kube.ImageName (Either Error (Git.URL, [Git.Revision])))  -- ^ The changes, grouped by image.
 loadChanges differ@ClusterDiffer{gitRepoDir} envPath start = withExceptT GitError $ do
   cfg <- getConfig differ
   let Config.ConfigRepo{url, branch} = Config.configRepo cfg
