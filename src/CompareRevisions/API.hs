@@ -249,7 +249,7 @@ instance L.ToHtml ChangeLog where
         L.th_ "Date"
         L.th_ "Subject"
         L.th_ "Author"
-      foldMap renderRevision (sortOn Git.commitDate (Map.keys (flattenChangelog changelog)))
+      foldMap renderRevision (reverse (sortOn Git.commitDate (Map.keys (flattenChangelog changelog))))
     L.h2_ (L.toHtml ("This week" :: Text))
     L.h2_ (L.toHtml ("Last week" :: Text))
     where
