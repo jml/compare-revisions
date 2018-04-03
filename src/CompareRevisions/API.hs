@@ -253,17 +253,17 @@ instance L.ToHtml ChangeLog where
     case thisWeek of
       [] -> L.p_ "No changes in range"
       revs -> do
-        L.h2_ "This week"
+        L.h2_ (L.toHtml ("This week (" <> show (length revs) <> ")" :: Text))
         renderRevisions revs
     case lastWeek of
       [] -> pass
       revs -> do
-        L.h2_ "Last week"
+        L.h2_ (L.toHtml ("Last week (" <> show (length revs) <> ")" :: Text))
         renderRevisions revs
     case rest of
       [] -> pass
       revs -> do
-        L.h2_ "Earlier"
+        L.h2_ (L.toHtml ("Earlier (" <> show (length revs) <> ")" :: Text))
         renderRevisions revs
     where
       groupedChanges =
