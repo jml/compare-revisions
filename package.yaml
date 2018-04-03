@@ -24,6 +24,7 @@ library:
     - array
     - async
     - attoparsec
+    - attoparsec-iso8601
     - bytestring
     - containers
     - cryptonite
@@ -79,6 +80,7 @@ tests:
     main: Tasty.hs
     source-dirs: tests
     dependencies:
+      - bytestring
       - compare-revisions
       - containers
       - filepath
@@ -89,4 +91,5 @@ tests:
       - tasty-hspec
       - temporary
       - text
+      - time
       - yaml

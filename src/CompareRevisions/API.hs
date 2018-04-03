@@ -228,12 +228,13 @@ instance L.ToHtml RevisionDiffs where
             L.th_ "Subject"
           foldMap renderRevision revs
 
-      renderRevision Git.Revision{..} =
+      renderRevision rev@Git.Revision{..} =
         L.tr_ $
-          L.td_ (L.toHtml abbrevHash) <>
-          L.td_ (L.toHtml commitDate) <>
+          L.td_ (L.toHtml (Git.abbrevHash rev)) <>
+          L.td_ (L.toHtml (formatDateAndTime commitDate)) <>
           L.td_ (L.toHtml authorName) <>
           L.td_ (L.toHtml subject)
+
 
 data ChangeLog
   = ChangeLog
@@ -259,7 +260,7 @@ instance L.ToHtml ChangeLog where
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
       renderRevision (uri, Git.Revision{commitDate, authorName, subject}) =
         L.tr_ $
-          L.td_ (L.toHtml commitDate) <>
+          L.td_ (L.toHtml (formatDateAndTime commitDate)) <>
           L.td_ (renderRepoURL uri) <>
           L.td_ (L.toHtml subject) <>
           L.td_ (L.toHtml authorName)
@@ -270,6 +271,12 @@ instance L.ToHtml ChangeLog where
         in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] (L.toHtml cleanPath)
       renderRepoURL uri@(Git.SCP _) = L.toHtml (Git.toText uri)
 
+
+-- | Format a UTC time in the standard way for our HTML.
+--
+-- This means ISO with numeric timezone.
+formatDateAndTime :: Time.UTCTime -> Text
+formatDateAndTime = toS . Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat (Just "%H:%M:%S%z"))
 
 flattenChangelog
   :: Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision]))
