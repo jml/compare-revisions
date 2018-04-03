@@ -258,11 +258,11 @@ instance L.ToHtml ChangeLog where
     L.h2_ (L.toHtml ("Last week" :: Text))
     where
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
-      renderRevision (uri, Git.Revision{commitDate, authorName, subject}) =
+      renderRevision (uri, Git.Revision{commitDate, authorName, subject, body}) =
         L.tr_ $
           L.td_ (L.toHtml (formatDateAndTime commitDate)) <>
           L.td_ (renderRepoURL uri) <>
-          L.td_ (L.toHtml subject) <>
+          L.td_ (L.pre_ (L.toHtml (subject <> maybe "" (\b -> "\n\n" <> b) body))) <>
           L.td_ (L.toHtml authorName)
       renderRepoURL (Git.URI uri) =
         let path = toS $ uriPath uri
