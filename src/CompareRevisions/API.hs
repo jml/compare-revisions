@@ -16,9 +16,11 @@ module CompareRevisions.API
 import Protolude hiding (diff)
 
 import Data.Aeson (ToJSON(..))
+import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Data.Text as Text
 import qualified Data.Time as Time
+import qualified Data.Time.Calendar.WeekDate as WeekDate
 import qualified Lucid as L
 import Network.URI (URI(..), parseRelativeReference, relativeTo, uriToString)
 import Servant (Server, Handler)
@@ -247,17 +249,40 @@ instance L.ToHtml ChangeLog where
   toHtmlRaw = L.toHtml
   toHtml ChangeLog{environment, startDate, changelog} = standardPage (environment <> " :: changelog") $ do
     L.p_ ("Since " <> L.toHtml (formatDate startDate))
-    L.table_ $ do
-      L.tr_ $ do
-        L.th_ "Date"
-        L.th_ "Repo"
-        L.th_ "Subject"
-        L.th_ "Author"
-      foldMap renderRevision (reverse (sortOn (Git.commitDate . snd) (Map.keys (flattenChangelog changelog))))
-    L.h2_ (L.toHtml ("This week" :: Text))
-    L.h2_ (L.toHtml ("Last week" :: Text))
+    let (thisWeek, lastWeek, rest) = groupedChanges
+    case thisWeek of
+      [] -> L.p_ "No changes in range"
+      revs -> do
+        L.h2_ "This week"
+        renderRevisions revs
+    case lastWeek of
+      [] -> pass
+      revs -> do
+        L.h2_ "Last week"
+        renderRevisions revs
+    case rest of
+      [] -> pass
+      revs -> do
+        L.h2_ "Earlier"
+        renderRevisions revs
     where
+      groupedChanges =
+        case groupByWeek allChanges of
+          [] -> ([], [], [])
+          [thisWeek] -> (thisWeek, [], [])
+          [thisWeek, lastWeek] -> (thisWeek, lastWeek, [])
+          thisWeek:lastWeek:rest -> (thisWeek, lastWeek, mconcat rest)
+      allChanges = reverse (sortOn (Git.commitDate . snd) (Map.keys (flattenChangelog changelog)))
+      groupByWeek = List.groupBy ((==) `on` (\(y, w, _) -> (y, w)) . WeekDate.toWeekDate . Time.utctDay . Git.commitDate . snd)
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
+      renderRevisions revs =
+        L.table_ $ do
+          void $ L.tr_ $ do
+            void $ L.th_ "Date"
+            void $ L.th_ "Repo"
+            void $ L.th_ "Subject"
+            void $ L.th_ "Author"
+          foldMap renderRevision revs
       renderRevision (uri, Git.Revision{commitDate, authorName, subject, body}) =
         L.tr_ $
           L.td_ (L.toHtml (formatDateAndTime commitDate)) <>
