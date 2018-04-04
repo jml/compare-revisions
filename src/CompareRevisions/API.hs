@@ -249,6 +249,7 @@ instance L.ToHtml ChangeLog where
   toHtmlRaw = L.toHtml
   toHtml ChangeLog{environment, startDate, changelog} = standardPage (environment <> " :: changelog") $ do
     L.p_ ("Since " <> L.toHtml (formatDate startDate))
+    L.p_ ("Change with " <> L.code_ "?start=YYYY-MM-DD")
     let (thisWeek, lastWeek, rest) = groupedChanges
     case thisWeek of
       [] -> L.p_ "No changes in range"
@@ -276,19 +277,17 @@ instance L.ToHtml ChangeLog where
       groupByWeek = List.groupBy ((==) `on` (\(y, w, _) -> (y, w)) . WeekDate.toWeekDate . Time.utctDay . Git.commitDate . snd)
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
       renderRevisions revs =
-        L.table_ $ do
-          void $ L.tr_ $ do
-            void $ L.th_ "Date"
-            void $ L.th_ "Repo"
-            void $ L.th_ "Subject"
-            void $ L.th_ "Author"
-          foldMap renderRevision revs
+        L.ul_ [L.class_ "revisions"] $ foldMap renderRevision revs
       renderRevision (uri, Git.Revision{commitDate, authorName, subject, body}) =
-        L.tr_ $
-          L.td_ (L.toHtml (formatDateAndTime commitDate)) <>
-          L.td_ (renderRepoURL uri) <>
-          L.td_ (L.pre_ (L.toHtml (subject <> maybe "" (\b -> "\n\n" <> b) body))) <>
-          L.td_ (L.toHtml authorName)
+        L.li_ [L.class_ "revision"] $ do
+          void $ L.div_ [L.class_ "subject"] (L.b_ (L.toHtml subject))
+          void $ L.div_ [L.class_ "by-line"] $ do
+            L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
+            L.toHtml (renderRepoURL uri)
+          case body of
+            Nothing -> pass
+            Just body' -> L.pre_ [L.class_ "body"] $ L.toHtml body'
+      formatShortDate = toS . Time.formatTime Time.defaultTimeLocale "%e %b"
       renderRepoURL (Git.URI uri) =
         let path = toS $ uriPath uri
             withoutGit = fromMaybe path (Text.stripSuffix ".git" path)
