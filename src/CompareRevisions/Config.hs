@@ -14,6 +14,7 @@ module CompareRevisions.Config
   -- * YAML files
   ConfigRepo(..)
   , Environment(..)
+  , EnvironmentName
   , ImageConfig(..)
   , PolicyConfig(..)
   -- ** Valid configuration from YAML files

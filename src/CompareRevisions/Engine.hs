@@ -11,6 +11,8 @@ module CompareRevisions.Engine
   , ClusterDiffer
   , newClusterDiffer
   , runClusterDiffer
+  , getConfig
+  , loadChanges
   , ClusterDiff(..)
   , getCurrentDifferences
   ) where
@@ -23,6 +25,7 @@ import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
 import qualified Data.Map as Map
 import Data.String (String)
+import qualified Data.Time as Time
 import qualified Prometheus as Prom
 import System.Directory (canonicalizePath)
 import System.FilePath ((</>), takeDirectory)
@@ -70,7 +73,7 @@ data Error
 -- | The differences between two clusters at a point in time.
 data ClusterDiff
  = ClusterDiff
- { revisionDiffs :: Map Kube.ImageName (Either Error [Git.Revision])
+ { revisionDiffs :: Map Kube.ImageName (Either Error (Git.URL, [Git.Revision]))
  , imageDiffs :: Map Kube.KubeID [Kube.ImageDiff]
  }
  deriving (Show)
@@ -102,6 +105,10 @@ newClusterDiffer Config.AppConfig{..} = do
   diff <- liftIO (newTVarIO empty)
   metrics <- initMetrics
   pure $ ClusterDiffer gitRepoDir configFile configVar diff metrics
+
+-- | Get the configuration of the differ.
+getConfig :: MonadIO io => ClusterDiffer -> io Config.ValidConfig
+getConfig ClusterDiffer{config} = liftIO . atomically . readTVar $ config
 
 -- | Get the most recently calculated differences from 'ClusterDiffer'.
 getCurrentDifferences :: MonadIO m => ClusterDiffer -> m (Maybe ClusterDiff)
@@ -151,8 +158,8 @@ data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, 
 
 -- | Calculate a new diff between clusters.
 calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterDiff
-calculateClusterDiff ClusterDiffer{gitRepoDir, config} = do
-  cfg <- liftIO . atomically . readTVar $ config
+calculateClusterDiff differ@ClusterDiffer{gitRepoDir} = do
+  cfg <- getConfig differ
   let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = Config.configRepo cfg
   imageDiffs <- compareImages gitRepoDir url branch (Config.path sourceEnv) (Config.path targetEnv)
   revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
@@ -170,7 +177,7 @@ compareRevisions
   => FilePath  -- ^ Path on disk to where all the Git repositories are.
   -> Map Kube.ImageName (Config.ImageConfig Config.PolicyConfig)  -- ^ How we go from the image name to Git.
   -> [Kube.ImageDiff]  -- ^ A set of differences between images.
-  -> m (Map Kube.ImageName (Either Error [Git.Revision]))  -- ^ For each image, either the Git revisions that have changed or an error.
+  -> m (Map Kube.ImageName (Either Error (Git.URL, [Git.Revision])))  -- ^ For each image, either the Git revisions that have changed or an error.
 compareRevisions gitRepoDir imagePolicies imageDiffs  = do
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
@@ -192,7 +199,7 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
             -- or restructuring the code to avoid the bug entirely,
             -- by passing the images through to `fetchGitLogs` and including them in the result.
             Map.empty
-          Just indexes -> Map.fromList (zip indexes (repeat revisions))
+          Just indexes -> Map.fromList (zip indexes (repeat ((\revs -> (repo, revs)) <$> revisions)))
   -- Include all the images we couldn't compare due to config defects.
   pure (imageToLogs <> map Left withErrors)
   where
@@ -273,6 +280,42 @@ compareImages gitRepoDir url branch sourceEnv targetEnv = withExceptT GitError $
   where
     checkoutPath = gitRepoDir </> "config-repo"
     loadEnv envPath = Kube.loadEnvFromDisk (checkoutPath </> envPath)
+
+
+-- | Find all the Git commits that have contributed to the change in a cluster
+-- over a time-span.
+--
+-- XXX: jml hates this name
+loadChanges
+  :: ClusterDiffer  -- ^ Where the magic happens
+  -> FilePath  -- ^ Path to the Kubernetes YAMLs within the configuration repository
+  -> Time.Day  -- ^ The start date for Git commits. Commits earlier than 00:00Z on this date will be excluded.
+  -> ExceptT Error IO (Map Kube.ImageName (Either Error (Git.URL, [Git.Revision])))  -- ^ The changes, grouped by image.
+loadChanges differ@ClusterDiffer{gitRepoDir} envPath start = withExceptT GitError $ do
+  cfg <- getConfig differ
+  let Config.ConfigRepo{url, branch} = Config.configRepo cfg
+  repoPath <- syncRepo gitRepoDir url
+  let branch' = fromMaybe (Git.Branch "master") branch
+  Git.ensureCheckout repoPath branch' checkoutPath
+  startHash' <- Git.firstCommitSince repoPath branch' (Time.UTCTime start (Time.secondsToDiffTime 0))
+  case startHash' of
+    Nothing -> pure Map.empty -- XXX: Maybe throw an error instead?
+    Just startHash@(Git.Hash startHashText) -> do
+      let startCheckoutPath = gitRepoDir </> ("checkout-" <> toS startHashText)
+      Git.ensureCheckout' repoPath startHash startCheckoutPath
+      -- We put current first (where 'dev' goes in compare-images) and start
+      -- second (analogous to 'prod'). That's because 'dev' is the future and
+      -- 'prod' is the past.
+      imageDiffs <- Kube.getDifferingImages
+                    <$> Kube.loadEnvFromDisk (checkoutPath </> envPath)
+                    <*> Kube.loadEnvFromDisk (startCheckoutPath </> envPath)
+      compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
+  where
+    -- XXX: Not sure how I feel about re-using the checkout that we're using
+    -- for compare-images etc.
+    checkoutPath = gitRepoDir </> "config-repo"
+
+
 
 -- | Get the Git revision corresponding to a particular label. Error if we
 -- can't figure it out.

@@ -6,22 +6,31 @@ module CompareRevisions.Git
   ( URL(..)
   , toText
   , Branch(..)
+  , Hash(..)
   , RevSpec(..)
   , Revision(..)
+  , abbrevHash
   , GitError(..)
   , ensureCheckout
+  , ensureCheckout'
   , syncRepo
   , getLog
+  , firstCommitSince
   -- * Exported for testing purposes
   , runGit
   , runGitInRepo
+  , parseFullerRevisions
   ) where
 
 import Protolude hiding (hash)
 
 import qualified Control.Logging as Log
+import qualified Data.Attoparsec.Text as Atto
+import qualified Data.Attoparsec.Time as Atto
 import qualified Data.ByteString.Char8 as ByteString
+import qualified Data.Char as Char
 import qualified Data.Text as Text
+import qualified Data.Time as Time
 import Data.Aeson (FromJSON(..), ToJSON(..), withText)
 import qualified Network.URI
 import System.Directory (removeDirectoryRecursive)
@@ -65,7 +74,11 @@ instance FromJSON URL where
 newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON, ToJSON)
 
 -- | A SHA-1 hash for a Git revision.
-newtype Hash = Hash Text deriving (Eq, Ord, Show, Generic, FromJSON)
+newtype Hash = Hash { unHash :: Text } deriving (Eq, Ord, Show, Generic, FromJSON)
+
+-- | Parse a full SHA1 hash.
+fullHashParser :: Atto.Parser Hash
+fullHashParser = Hash . toS <$> Atto.takeWhile1 Char.isHexDigit
 
 -- | Specifies a revision in a Git repository.
 newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show, Generic, FromJSON)
@@ -73,11 +86,64 @@ newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show, Generic, FromJSON)
 -- | A Git revision.
 data Revision
   = Revision
-  { abbrevHash :: Text  -- TODO: Hash
-  , commitDate :: Text  -- TODO: some sort of data type
+  { revisionHash :: Hash
+  , commitDate :: Time.UTCTime
   , authorName :: Text
   , subject :: Text
+  , body :: Maybe Text
   } deriving (Eq, Ord, Show)
+
+-- | Get the abbreviated hash for a revision.
+--
+-- Does /not/ use the same algorithm as Git. Instead naively gets the last 8
+-- characters of the full hash.
+abbrevHash :: Revision -> Text
+abbrevHash = Text.takeEnd 8 . unHash . revisionHash
+
+-- | Parser for a "fuller" Git revision.
+--
+-- e.g.
+--
+-- commit 2c141409774c95bb0f8e6db9773c50de8c4dc6ea
+-- Author:     bryan <bryan@weave.works>
+-- AuthorDate: 2018-03-27 13:08:24 +0000
+-- Commit:     Weave Flux <support@weave.works>
+-- CommitDate: 2018-03-27 13:08:24 +0000
+--
+--     I want to leave a bit longer for cortex#681 to be tested in dev
+--
+--     - Locked: cortex:deployment/distributor
+--     - Updated policies: cortex:deployment/distributor
+fullerRevisionParser :: Atto.Parser Revision
+fullerRevisionParser = do
+  -- We're ignoring a lot of information here (the underscore-prefixed
+  -- variables). This is because we don't have actual use-cases for it yet.
+  -- Please feel free to store this information when we do need it.
+  fullHash <- "commit " *> fullHashParser <* Atto.endOfLine
+  _merge <- optional ("Merge: " *> (abbrevHashParser `Atto.sepBy` " ") <* Atto.endOfLine)
+  (authorName, _authorEmail) <- "Author:     " *> personParser <* Atto.endOfLine
+  _authorDate <- "AuthorDate: " *> Atto.utcTime <* Atto.endOfLine
+  (_committerName, _committerEmail) <- "Commit:    " *> personParser <* Atto.endOfLine
+  commitDate <- "CommitDate: " *> Atto.utcTime <* Atto.endOfLine
+  Atto.endOfLine
+  subject <- commitMessageLine
+  body <- optional ("    " *> Atto.endOfLine *> (Text.unlines <$> many commitMessageLine))
+  pure $ Revision fullHash commitDate authorName (toS subject) body
+  where
+    abbrevHashParser = Atto.takeWhile1 Char.isHexDigit
+    personParser = do
+      name <- Atto.takeTill (== '<')
+      email <- Atto.takeTill (== '>')
+      void $ Atto.char '>'
+      pure (Text.strip name, email)
+    commitMessageLine = "    " *> Atto.takeTill Atto.isEndOfLine <* Atto.endOfLine
+
+-- | Parse the output of `git log --format=fuller`.
+parseFullerRevisions :: MonadError GitError m => ByteString -> m [Revision]
+parseFullerRevisions input =
+  case Atto.parseOnly (fullerRevisionParser `Atto.sepBy` Atto.endOfLine) (toS input) of
+    Left err -> throwError $ InvalidRevision (toS err)
+    Right revs -> pure revs
 
 -- XXX: Not sure this is a good idea. Maybe use exceptions all the way
 -- through?
@@ -121,14 +187,7 @@ fetchRepo :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> m (
 fetchRepo repoPath = void $ runGitInRepo repoPath ["fetch", "--all", "--prune"]
 
 
--- | Ensure a checkout exists at the given path.
---
--- Assumes that:
---   * we have write access to the repo (we create checkouts under there)
---   * we are responsible for managing the checkout path
---
--- Checkout path is a symlink to the canonical location of the working tree,
--- which is updated to point at a new directory if they are out of date.
+-- | Ensure a checkout of a branch exists at the given path.
 ensureCheckout
   :: (MonadError GitError m, MonadIO m, HasCallStack)
   => FilePath -- ^ Path to a Git repository on disk
@@ -137,9 +196,31 @@ ensureCheckout
   -> m ()
 ensureCheckout repoPath branch workTreePath = do
   Log.debug' $ "Ensuring checkout of " <> toS repoPath <> " to " <> show branch <> " at " <> toS workTreePath
-  hash@(Hash hashText) <- hashForBranchHead branch
+  hash <- hashForBranchHead branch
+  ensureCheckout' repoPath hash workTreePath
+  where
+    -- | Get the SHA-1 of the head of a branch.
+    hashForBranchHead :: (HasCallStack, MonadError GitError m, MonadIO m) => Branch -> m Hash
+    hashForBranchHead (Branch b) = Hash . Text.strip . toS . fst <$> runGitInRepo repoPath ["rev-list", "-n1", b]
+
+
+-- | Ensure a checkout of the given revision exists at the given path.
+--
+-- Assumes that:
+--   * we have write access to the repo (we create checkouts under there)
+--   * we are responsible for managing the checkout path
+--
+-- Checkout path is a symlink to the canonical location of the working tree,
+-- which is updated to point at a new directory if they are out of date.
+ensureCheckout'
+  :: (MonadError GitError m, MonadIO m, HasCallStack)
+  => FilePath -- ^ Path to a Git repository on disk
+  -> Hash -- ^ The Git SHA1 that we want to check out
+  -> FilePath -- ^ The path to the checkout
+  -> m ()
+ensureCheckout' repoPath (Hash hashText) workTreePath = do
   let canonicalTree = repoPath </> ("rev-" <> toS hashText)
-  addWorkTree canonicalTree hash
+  addWorkTree canonicalTree
   oldTree <- liftIO $ swapSymlink workTreePath canonicalTree
   case oldTree of
     Nothing -> pass
@@ -150,17 +231,13 @@ ensureCheckout repoPath branch workTreePath = do
           removeWorkTree oldTreePath
 
   where
-    -- | Get the SHA-1 of the head of a branch.
-    hashForBranchHead :: (HasCallStack, MonadError GitError m, MonadIO m) => Branch -> m Hash
-    hashForBranchHead (Branch b) = Hash . Text.strip . toS . fst <$> runGitInRepo repoPath ["rev-list", "-n1", b]
-
     -- | Checkout a branch of a repo to a given path.
-    addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()
-    addWorkTree path (Hash hash) =
+    addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> m ()
+    addWorkTree path =
       -- TODO: Doesn't handle case where path exists but is a file (not a
       -- directory), or doesn't contain a valid worktree.
       unlessM (liftIO $ fileExist path) $ do
-        void $ runGitInRepo repoPath ["worktree", "add", toS path, hash]
+        void $ runGitInRepo repoPath ["worktree", "add", toS path, hashText]
         Log.debug' $ "Added work tree at " <> toS path
 
     removeWorkTree path = do
@@ -197,21 +274,37 @@ ensureCheckout repoPath branch workTreePath = do
       result <- tryJust (guard . isDoesNotExistError) (readSymbolicLink path)
       pure $ hush result
 
+-- | Find the first commit made since the given time, if there is such a commit.
+firstCommitSince
+  :: (HasCallStack, MonadError GitError m, MonadIO m)
+  => FilePath  -- ^ Path to the repository
+  -> Branch -- ^ The branch to list
+  -> Time.UTCTime  -- ^ Earliest possible time of the commit.
+  -> m (Maybe Hash)  -- ^ The hash of the commit.
+firstCommitSince repoPath (Branch branch) time = do
+  -- This approach means that if 'time' is a long time in the past, we'll have
+  -- to process a *lot* of revisions. If this turns out to be a problem in
+  -- practice, could either come up with a cleverer way of querying Git
+  -- (preferred) or add a --before clause and exponentially back off until we
+  -- reach a time greater than now.
+  let command = ["rev-list", "--first-parent", "--after=" <> formatIsoTime time, branch]
+  (out, _) <- runGitInRepo repoPath command
+  pure $ Hash . toS <$> lastMay (ByteString.lines out)
+
+-- | Format a UTC time in ISO format.
+formatIsoTime :: Time.UTCTime -> Text
+formatIsoTime = toS . Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat (Just "%H:%M:%S %z"))
+
 getLog :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> RevSpec -> Maybe [FilePath] -> m [Revision]
 getLog repoPath (RevSpec start) (RevSpec end) paths = do
-  let command = ["log", "--first-parent", "--format=%h::%cd::%an::%s",  "--date=iso", range]
+  let command = ["log", "--first-parent", "--format=fuller", "--date=iso", range]
   let withFilter = command <> case paths of
                                 Nothing -> []
                                 Just ps -> ["--"] <> map toS ps
   (out, _) <- runGitInRepo repoPath withFilter
-  -- XXX: This will bork on the first invalid line. We can do better.
-  traverse parseRevision (ByteString.lines out)
+  parseFullerRevisions out
   where
     range = start <> ".." <> end
-    parseRevision line =
-      case Text.splitOn "::" (decodeUtf8 line) of
-        [hash, date, name, subject] -> pure (Revision hash date name subject)
-        _ -> throwError (InvalidRevision line)
 
 -- | Run 'git' in a repository.
 runGitInRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> [Text] -> m (ByteString, ByteString)

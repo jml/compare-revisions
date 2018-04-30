@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 92991c49e4ae99bda52e1c345323c21f1a7bdd9985fa7d1f2437c58349a650cb
+-- hash: 71f6c2c9ccbfd7ed7a25467f36b1d6a7d269f13787947e5aec7e88ca9f22398a
 
 name:           compare-revisions
 version:        0.1.0
@@ -32,6 +32,7 @@ library
     , array
     , async
     , attoparsec
+    , attoparsec-iso8601
     , base >=4.9 && <5
     , bytestring
     , containers
@@ -124,6 +125,7 @@ test-suite tasty
   build-depends:
       QuickCheck
     , base >=4.9 && <5
+    , bytestring
     , compare-revisions
     , containers
     , directory
@@ -134,6 +136,7 @@ test-suite tasty
     , tasty-hspec
     , temporary
     , text
+    , time
     , yaml
   other-modules:
       Config
