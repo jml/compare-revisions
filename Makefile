@@ -1,4 +1,4 @@
-.PHONY: all build test clean publish-image
+.PHONY: all build test clean build-image publish-image
 .DEFAULT_GOAL := all
 
 # Boiler plate for bulding Docker containers.
@@ -34,7 +34,7 @@ compare-revisions-base/$(UPTODATE): compare-revisions-base/Dockerfile
 	$(SUDO) docker build -t $(BASE_IMAGE_NAME) compare-revisions-base/
 	touch $@
 
-all: $(UPTODATE)
+all: build-image
 
 # stack does its own dependency management and it's a fool's errand to try to
 # second-guess it. Instead, just always run stack when we think we need a build.
@@ -50,7 +50,10 @@ $(UPTODATE): compare-revisions-base/$(UPTODATE) build
 	@echo $(OUTPUT_IMAGE_NAME):$(IMAGE_TAG)
 	touch $@
 
-publish-image: $(UPTODATE)
+# Human friendly alias for building the Docker image
+build-image: $(UPTODATE)
+
+publish-image: build-image
 	$(SUDO) docker push $(OUTPUT_IMAGE_NAME):$(IMAGE_TAG)
 
 clean:
