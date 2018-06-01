@@ -28,6 +28,10 @@ jobs:
           paths:
             - /root/.stack
             - .stack-work
+
+      # fpco/stack-build doesn't include a docker client
+      - run: apt update && apt install -y docker.io
+
       - run:
           name: Tests
           command: stack test --skip-ghc-check --no-terminal
