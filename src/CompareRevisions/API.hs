@@ -281,7 +281,15 @@ instance L.ToHtml ChangeLog where
 
 
 -- XXX: Is there a better return type for this?
-renderChangelogRevision :: Monad m => Git.URL -> Git.Revision -> L.HtmlT m ()
+-- | Render a Git revision, intended to be part of a changelog, as HTML.
+--
+-- Idea is to show everything we can about who made it and why, so that people
+-- reviewing it can gauge its user impact.
+renderChangelogRevision
+  :: Monad m
+  => Git.URL  -- ^ The URL of the Git repository that this revision is from
+  -> Git.Revision  -- ^ The revision to render
+  -> L.HtmlT m ()
 renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, body} =
   L.li_ [L.class_ "revision"] $ do
     void $ L.div_ [L.class_ "subject"] (L.b_ (L.toHtml subject))
