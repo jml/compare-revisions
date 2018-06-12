@@ -277,12 +277,12 @@ instance L.ToHtml ChangeLog where
       groupByWeek = List.groupBy ((==) `on` (\(y, w, _) -> (y, w)) . WeekDate.toWeekDate . Time.utctDay . Git.commitDate . snd)
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
       renderRevisions revs =
-        L.ul_ [L.class_ "revisions"] $ foldMap renderChangelogRevision revs
+        L.ul_ [L.class_ "revisions"] $ foldMap (uncurry renderChangelogRevision) revs
 
 
 -- XXX: Is there a better return type for this?
-renderChangelogRevision :: Monad m => (Git.URL, Git.Revision) -> L.HtmlT m ()
-renderChangelogRevision (gitUri, Git.Revision{commitDate, authorName, subject, body}) =
+renderChangelogRevision :: Monad m => Git.URL -> Git.Revision -> L.HtmlT m ()
+renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, body} =
   L.li_ [L.class_ "revision"] $ do
     void $ L.div_ [L.class_ "subject"] (L.b_ (L.toHtml subject))
     void $ L.div_ [L.class_ "by-line"] $ do
