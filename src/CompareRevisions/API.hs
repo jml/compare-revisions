@@ -277,23 +277,28 @@ instance L.ToHtml ChangeLog where
       groupByWeek = List.groupBy ((==) `on` (\(y, w, _) -> (y, w)) . WeekDate.toWeekDate . Time.utctDay . Git.commitDate . snd)
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
       renderRevisions revs =
-        L.ul_ [L.class_ "revisions"] $ foldMap renderRevision revs
-      renderRevision (uri, Git.Revision{commitDate, authorName, subject, body}) =
-        L.li_ [L.class_ "revision"] $ do
-          void $ L.div_ [L.class_ "subject"] (L.b_ (L.toHtml subject))
-          void $ L.div_ [L.class_ "by-line"] $ do
-            L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
-            L.toHtml (renderRepoURL uri)
-          case body of
-            Nothing -> pass
-            Just body' -> L.pre_ [L.class_ "body"] $ L.toHtml body'
-      formatShortDate = toS . Time.formatTime Time.defaultTimeLocale "%e %b"
-      renderRepoURL (Git.URI uri) =
-        let path = toS $ uriPath uri
-            withoutGit = fromMaybe path (Text.stripSuffix ".git" path)
-            cleanPath = fromMaybe withoutGit (Text.stripPrefix "/weaveworks/" withoutGit)
-        in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] (L.toHtml cleanPath)
-      renderRepoURL uri@(Git.SCP _) = L.toHtml (Git.toText uri)
+        L.ul_ [L.class_ "revisions"] $ foldMap renderChangelogRevision revs
+
+
+-- XXX: Is there a better return type for this?
+renderChangelogRevision :: Monad m => (Git.URL, Git.Revision) -> L.HtmlT m ()
+renderChangelogRevision (gitUri, Git.Revision{commitDate, authorName, subject, body}) =
+  L.li_ [L.class_ "revision"] $ do
+    void $ L.div_ [L.class_ "subject"] (L.b_ (L.toHtml subject))
+    void $ L.div_ [L.class_ "by-line"] $ do
+      L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
+      L.toHtml (renderRepoURL gitUri)
+    case body of
+      Nothing -> pass
+      Just body' -> L.pre_ [L.class_ "body"] $ L.toHtml body'
+  where
+    formatShortDate = toS . Time.formatTime Time.defaultTimeLocale "%e %b"
+    renderRepoURL (Git.URI uri) =
+      let path = toS $ uriPath uri
+          withoutGit = fromMaybe path (Text.stripSuffix ".git" path)
+          cleanPath = fromMaybe withoutGit (Text.stripPrefix "/weaveworks/" withoutGit)
+      in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] (L.toHtml cleanPath)
+    renderRepoURL uri@(Git.SCP _) = L.toHtml (Git.toText uri)
 
 
 -- | Format a UTC time in the standard way for our HTML.
