@@ -4,11 +4,14 @@ module CompareRevisions.GitHub
   , RepositoryName
   , websiteURI
   , getRepo
+  , findIssues
   , repoPath
   ) where
 
 import Protolude
 
+import qualified Data.Attoparsec.Text as Atto
+import Data.Either (fromRight)
 import qualified Data.Text as Text
 import Network.URI (URI(..))
 import qualified Network.URI as URI
@@ -54,3 +57,14 @@ getRepo uri =
   case Text.splitOn "/" (repoPath uri) of
     [org, repo] -> Just (org, repo)
     _ -> Nothing
+
+-- | Find references to all the GitHub issues within some text.
+--
+-- TODO: Will ignore any qualifications before issue references, thus
+-- returning unusual results for issues in different repositories.
+findIssues :: Text -> [Int]
+findIssues text =
+  fromRight [] (Atto.parseOnly prParser text)
+  where
+    prParser = many (many (Atto.notChar '#') *> prRef)
+    prRef = Atto.char '#' *> Atto.decimal

@@ -292,7 +292,9 @@ renderChangelogRevision
   -> L.HtmlT m ()
 renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, body} =
   L.li_ [L.class_ "revision"] $ do
-    void $ L.div_ [L.class_ "subject"] (L.b_ (L.toHtml subject))
+    void $ L.div_ [L.class_ "subject"] $ do
+      L.b_ (L.toHtml subject)
+      mapM_ (linkToIssue gitUri) (GitHub.findIssues subject)
     void $ L.div_ [L.class_ "by-line"] $ do
       L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
       renderRepoURL gitUri
@@ -321,6 +323,20 @@ renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, bod
         Just ("weaveworks", repo) -> Just repo
         Just (org, repo) -> Just (org <> "/" <> repo)
 
+    linkToIssue url issue =
+      case GitHub.websiteURI url of
+        Nothing -> L.toHtml ("#" <> show issue :: Text)
+        Just uri ->
+          let issueURI = uri { uriPath = uriPath uri <> "/issues/" <> show issue }
+              -- XXX: The repetition between this function and renderRepoUrl
+              -- points to a refactoring in GitHub. We should have it parse
+              -- the Git.URL into a new data type containing (Organization,
+              -- RepositoryName). It should then use that to generate
+              -- websiteURI, repoPath, and others.
+              issueRef = case repoShortName url of
+                           Nothing -> "#" <> show issue
+                           Just shortName -> shortName <> "#" <> show issue
+          in L.a_ [L.href_ (toS $ uriToString (const "") issueURI "")] (L.toHtml issueRef)
 
 -- | Format a UTC time in the standard way for our HTML.
 --
