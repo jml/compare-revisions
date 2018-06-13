@@ -18,7 +18,6 @@ import Protolude hiding (diff)
 import Data.Aeson (ToJSON(..))
 import qualified Data.List as List
 import qualified Data.Map as Map
-import qualified Data.Text as Text
 import qualified Data.Time as Time
 import qualified Data.Time.Calendar.WeekDate as WeekDate
 import qualified Lucid as L
@@ -31,6 +30,7 @@ import Servant.Server (ServantErr(..), err404, err500)
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Engine as Engine
 import qualified CompareRevisions.Git as Git
+import qualified CompareRevisions.GitHub as GitHub
 import qualified CompareRevisions.Kube as Kube
 
 -- | compare-revisions API definition.
@@ -295,18 +295,31 @@ renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, bod
     void $ L.div_ [L.class_ "subject"] (L.b_ (L.toHtml subject))
     void $ L.div_ [L.class_ "by-line"] $ do
       L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
-      L.toHtml (renderRepoURL gitUri)
+      renderRepoURL gitUri
     case body of
       Nothing -> pass
       Just body' -> L.pre_ [L.class_ "body"] $ L.toHtml body'
   where
     formatShortDate = toS . Time.formatTime Time.defaultTimeLocale "%e %b"
-    renderRepoURL (Git.URI uri) =
-      let path = toS $ uriPath uri
-          withoutGit = fromMaybe path (Text.stripSuffix ".git" path)
-          cleanPath = fromMaybe withoutGit (Text.stripPrefix "/weaveworks/" withoutGit)
-      in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] (L.toHtml cleanPath)
-    renderRepoURL uri@(Git.SCP _) = L.toHtml (Git.toText uri)
+
+    -- | Render a repository URL. If it's a GitHub repo, link to the web page.
+    -- Otherwise, just show the URL as plain text, since we don't really know
+    -- what to do with it.
+    renderRepoURL url =
+      case GitHub.websiteURI url of
+        Nothing -> L.toHtml (Git.toText url)
+        Just uri ->
+          L.a_ [L.href_ (toS $ uriToString (const "") uri "")] $
+          L.toHtml $ fromMaybe (GitHub.repoPath url) (repoShortName url)
+
+    -- | How we want a repository to appear on the page. If it's a
+    -- @weaveworks@ repository, just refer to it by name. Otherwise, by
+    -- @org/name@ if it's a GitHub repo. Otherwise, refuse to guess.
+    repoShortName url =
+      case GitHub.getRepo url of
+        Nothing -> Nothing
+        Just ("weaveworks", repo) -> Just repo
+        Just (org, repo) -> Just (org <> "/" <> repo)
 
 
 -- | Format a UTC time in the standard way for our HTML.

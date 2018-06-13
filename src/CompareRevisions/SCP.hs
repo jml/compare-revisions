@@ -2,6 +2,8 @@ module CompareRevisions.SCP
   ( SCP(..)
   , formatSCP
   , parseSCP
+  , getFilePath
+  , getHostname
   , Hostname(unHostname)
   , makeHostname
   , Username(unUsername)
@@ -30,7 +32,7 @@ import Data.Char (isDigit, isLetter)
 import Data.String (IsString(..))
 import qualified Data.Text as Text
 
-
+-- | A location that can be used as either a source or destination for SCP.
 data SCP = File FilePath
          | RemoteFile Hostname FilePath
          | AuthRemoteFile Username Hostname FilePath
@@ -56,6 +58,20 @@ parseSCP = hush . parseOnly (scpParser <* endOfInput)
                      ]
     path = toS <$> takeWhile1 (/= chr 0)
 
+-- | Get the FilePath referred to by an SCP location.
+getFilePath :: SCP -> FilePath
+getFilePath (File fp) = fp
+getFilePath (RemoteFile _ fp) = fp
+getFilePath (AuthRemoteFile _ _ fp) = fp
+
+-- | Get the hostname referred to by an SCP location, if any.
+--
+-- If there is no hostname, that means the SCP location refers to a local filepath.
+-- You may wish to default to @localhost@ in such cases.
+getHostname :: SCP -> Maybe Hostname
+getHostname (File _) = Nothing
+getHostname (RemoteFile hostname _) = Just hostname
+getHostname (AuthRemoteFile _ hostname _) = Just hostname
 
 newtype Hostname = Hostname { unHostname :: Text } deriving (Eq, Ord, Show)
 

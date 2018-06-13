@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 71f6c2c9ccbfd7ed7a25467f36b1d6a7d269f13787947e5aec7e88ca9f22398a
+-- hash: 0a7d2a2e9aa6ce395a7f247713ea91d1e93e3a845749437bfd19cb8741ead8f0
 
 name:           compare-revisions
 version:        0.1.0
@@ -74,6 +74,7 @@ library
       CompareRevisions.Duration
       CompareRevisions.Engine
       CompareRevisions.Git
+      CompareRevisions.GitHub
       CompareRevisions.Kube
       CompareRevisions.Regex
       CompareRevisions.SCP
