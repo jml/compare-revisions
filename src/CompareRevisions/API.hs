@@ -294,10 +294,12 @@ renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, bod
   let gitHubRepo = GitHub.repositoryFromGitURL gitUri
   L.li_ [L.class_ "revision"] $ do
     void $ L.div_ [L.class_ "subject"] $ do
-      L.b_ (L.toHtml subject)
       case gitHubRepo of
-        Just repo -> mapM_ (linkToIssue repo) (GitHub.findIssues subject)
+        Just repo -> do
+          mapM_ (linkToIssue repo) (GitHub.findIssues subject)
+          " "
         Nothing -> pass
+      L.b_ (L.toHtml subject)
     void $ L.div_ [L.class_ "by-line"] $ do
       L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
       case gitHubRepo of
