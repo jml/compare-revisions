@@ -38,9 +38,16 @@ data Repository
 -- | Get the GitHub organization and repository from a Git URL.
 repositoryFromGitURL :: Git.URL -> Maybe Repository
 repositoryFromGitURL uri =
-  case Text.splitOn "/" (repoPath uri) of
+  case Text.splitOn "/" path of
     [org, repo] -> Just $ Repository org repo
     _ -> Nothing
+
+  where
+    path = fromMaybe withoutGit (Text.stripPrefix "/" withoutGit)
+    withoutGit = fromMaybe uriPath' (Text.stripSuffix ".git" uriPath')
+    uriPath' = toS $ case uri of
+                       Git.SCP scp -> SCP.getFilePath scp
+                       Git.URI url -> uriPath url
 
 -- | The URL for a repository's web page.
 websiteURI :: Repository -> URI
@@ -54,15 +61,6 @@ websiteURI Repository{organization, repositoryName} =
     }
   , uriPath = toS (organization <> "/" <> repositoryName)
   }
-
--- | Get the path to the repository from the URL. Strips any preceding @/@.
-repoPath :: Git.URL -> Text
-repoPath uri =
-  let path = toS $ case uri of
-                     Git.SCP scp -> SCP.getFilePath scp
-                     Git.URI url -> uriPath url
-      withoutGit = fromMaybe path (Text.stripSuffix ".git" path)
-  in fromMaybe withoutGit (Text.stripPrefix "/" withoutGit)
 
 -- | Find references to all the GitHub issues within some text.
 --
