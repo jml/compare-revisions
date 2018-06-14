@@ -1,11 +1,12 @@
+{-# LANGUAGE NamedFieldPuns #-}
 -- | Utilities for manipulating Git URLs based on GitHub conventions.
 module CompareRevisions.GitHub
   ( Organization
   , RepositoryName
+  , Repository(..)
   , websiteURI
-  , getRepo
+  , repositoryFromGitURL
   , findIssues
-  , repoPath
   ) where
 
 import Protolude
@@ -25,22 +26,34 @@ type Organization = Text
 -- | The name of a repository.
 type RepositoryName = Text
 
--- | Assuming a Git URL points to a GitHub repository, generate a URL for that
--- repository's web page.
-websiteURI :: Git.URL -> Maybe URI
-websiteURI url@(Git.URI uri) =
-  Just $ uri { uriPath = toS (repoPath url) }
-websiteURI url@(Git.SCP scp) =
-  foreach (SCP.getHostname scp) $ \hostname ->
-    URI.nullURI
-    { uriScheme = "https:"
-    , uriAuthority = Just URI.URIAuth
-      { URI.uriUserInfo = ""
-      , URI.uriRegName = toS (SCP.unHostname hostname)
-      , URI.uriPort = ""
-      }
-    , uriPath = toS (repoPath url)
+-- | A repository on GitHub.
+--
+-- Construct directly, or from a Git URL with 'getRepo'.
+data Repository
+  = Repository
+  { organization :: Organization -- ^ The name of the organization.
+  , repositoryName :: RepositoryName -- ^ The name of the repository.
+  } deriving (Eq, Show)
+
+-- | Get the GitHub organization and repository from a Git URL.
+repositoryFromGitURL :: Git.URL -> Maybe Repository
+repositoryFromGitURL uri =
+  case Text.splitOn "/" (repoPath uri) of
+    [org, repo] -> Just $ Repository org repo
+    _ -> Nothing
+
+-- | The URL for a repository's web page.
+websiteURI :: Repository -> URI
+websiteURI Repository{organization, repositoryName} =
+  URI.nullURI
+  { uriScheme = "https:"
+  , uriAuthority = Just URI.URIAuth
+    { URI.uriUserInfo = ""
+    , URI.uriRegName = "github.com"
+    , URI.uriPort = ""
     }
+  , uriPath = toS (organization <> "/" <> repositoryName)
+  }
 
 -- | Get the path to the repository from the URL. Strips any preceding @/@.
 repoPath :: Git.URL -> Text
@@ -50,13 +63,6 @@ repoPath uri =
                      Git.URI url -> uriPath url
       withoutGit = fromMaybe path (Text.stripSuffix ".git" path)
   in fromMaybe withoutGit (Text.stripPrefix "/" withoutGit)
-
--- | Get the GitHub organization and repository from a Git URL.
-getRepo :: Git.URL -> Maybe (Organization, RepositoryName)
-getRepo uri =
-  case Text.splitOn "/" (repoPath uri) of
-    [org, repo] -> Just (org, repo)
-    _ -> Nothing
 
 -- | Find references to all the GitHub issues within some text.
 --

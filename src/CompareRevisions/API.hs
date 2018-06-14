@@ -290,53 +290,43 @@ renderChangelogRevision
   => Git.URL  -- ^ The URL of the Git repository that this revision is from
   -> Git.Revision  -- ^ The revision to render
   -> L.HtmlT m ()
-renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, body} =
+renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, body} = do
+  let gitHubRepo = GitHub.repositoryFromGitURL gitUri
   L.li_ [L.class_ "revision"] $ do
     void $ L.div_ [L.class_ "subject"] $ do
       L.b_ (L.toHtml subject)
-      mapM_ (linkToIssue gitUri) (GitHub.findIssues subject)
+      case gitHubRepo of
+        Just repo -> mapM_ (linkToIssue repo) (GitHub.findIssues subject)
+        Nothing -> pass
     void $ L.div_ [L.class_ "by-line"] $ do
       L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
-      renderRepoURL gitUri
+      case gitHubRepo of
+        Just repo -> renderRepoURL repo
+        Nothing -> L.toHtml (Git.toText gitUri)
     case body of
       Nothing -> pass
       Just body' -> L.pre_ [L.class_ "body"] $ L.toHtml body'
   where
     formatShortDate = toS . Time.formatTime Time.defaultTimeLocale "%e %b"
 
-    -- | Render a repository URL. If it's a GitHub repo, link to the web page.
-    -- Otherwise, just show the URL as plain text, since we don't really know
-    -- what to do with it.
-    renderRepoURL url =
-      case GitHub.websiteURI url of
-        Nothing -> L.toHtml (Git.toText url)
-        Just uri ->
-          L.a_ [L.href_ (toS $ uriToString (const "") uri "")] $
-          L.toHtml $ fromMaybe (GitHub.repoPath url) (repoShortName url)
+    renderRepoURL repo =
+      let uri = GitHub.websiteURI repo
+      in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] $
+         L.toHtml $ repoShortName repo
 
     -- | How we want a repository to appear on the page. If it's a
     -- @weaveworks@ repository, just refer to it by name. Otherwise, by
     -- @org/name@ if it's a GitHub repo. Otherwise, refuse to guess.
-    repoShortName url =
-      case GitHub.getRepo url of
-        Nothing -> Nothing
-        Just ("weaveworks", repo) -> Just repo
-        Just (org, repo) -> Just (org <> "/" <> repo)
+    repoShortName GitHub.Repository{organization, repositoryName} =
+      case organization of
+        "weaveworks" -> repositoryName
+        _ -> organization <> "/" <> repositoryName
 
-    linkToIssue url issue =
-      case GitHub.websiteURI url of
-        Nothing -> L.toHtml ("#" <> show issue :: Text)
-        Just uri ->
-          let issueURI = uri { uriPath = uriPath uri <> "/issues/" <> show issue }
-              -- XXX: The repetition between this function and renderRepoUrl
-              -- points to a refactoring in GitHub. We should have it parse
-              -- the Git.URL into a new data type containing (Organization,
-              -- RepositoryName). It should then use that to generate
-              -- websiteURI, repoPath, and others.
-              issueRef = case repoShortName url of
-                           Nothing -> "#" <> show issue
-                           Just shortName -> shortName <> "#" <> show issue
-          in L.a_ [L.href_ (toS $ uriToString (const "") issueURI "")] (L.toHtml issueRef)
+    linkToIssue repo issue =
+      let uri = GitHub.websiteURI repo
+          issueURI = uri { uriPath = uriPath uri <> "/issues/" <> show issue }
+          issueRef = repoShortName repo <> "#" <> show issue
+      in L.a_ [L.href_ (toS $ uriToString (const "") issueURI "")] (L.toHtml issueRef)
 
 -- | Format a UTC time in the standard way for our HTML.
 --
