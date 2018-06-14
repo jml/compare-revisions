@@ -59,7 +59,7 @@ websiteURI Repository{organization, repositoryName} =
     , URI.uriRegName = "github.com"
     , URI.uriPort = ""
     }
-  , uriPath = toS (organization <> "/" <> repositoryName)
+  , uriPath = toS ("/" <> organization <> "/" <> repositoryName)
   }
 
 -- | Find references to all the GitHub issues within some text.
