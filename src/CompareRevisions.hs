@@ -1,3 +1,5 @@
+{-# LANGUAGE NamedFieldPuns #-}
+
 -- | Entry point for compare-revisions.
 module CompareRevisions
   ( startApp
@@ -17,7 +19,12 @@ import qualified CompareRevisions.Server as Server
 import qualified CompareRevisions.Server.Logging as Log
 
 -- | Overall command-line configuration.
-data Config = Config Config.AppConfig Server.Config Log.LogLevel deriving (Eq, Show)
+data Config
+  = Config
+  { appConfig :: Config.AppConfig  -- ^ Configuration specific to compare-revisions
+  , serverConfig :: Server.Config  -- ^ Web server configuration
+  , logLevel :: Log.LogLevel  -- ^ What level to log at
+  } deriving (Eq, Show)
 
 -- | Command-line parser for compare-revisions.
 options :: ParserInfo Config
@@ -35,7 +42,7 @@ options = info (helper <*> parser) description
 -- | Run the service.
 startApp :: IO ()
 startApp = do
-  Config appConfig serverConfig logLevel <- execParser options
+  Config{appConfig, serverConfig, logLevel} <- execParser options
   Log.withLogging logLevel $ do
     result <- runExceptT $ do
       clusterDiffer <- Engine.newClusterDiffer appConfig
