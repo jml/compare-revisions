@@ -18,7 +18,6 @@ import Protolude hiding (diff)
 import Data.Aeson (ToJSON(..))
 import qualified Data.List as List
 import qualified Data.Map as Map
-import qualified Data.Text as Text
 import qualified Data.Time as Time
 import qualified Data.Time.Calendar.WeekDate as WeekDate
 import qualified Lucid as L
@@ -31,6 +30,7 @@ import Servant.Server (ServantErr(..), err404, err500)
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Engine as Engine
 import qualified CompareRevisions.Git as Git
+import qualified CompareRevisions.GitHub as GitHub
 import qualified CompareRevisions.Kube as Kube
 
 -- | compare-revisions API definition.
@@ -277,24 +277,58 @@ instance L.ToHtml ChangeLog where
       groupByWeek = List.groupBy ((==) `on` (\(y, w, _) -> (y, w)) . WeekDate.toWeekDate . Time.utctDay . Git.commitDate . snd)
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
       renderRevisions revs =
-        L.ul_ [L.class_ "revisions"] $ foldMap renderRevision revs
-      renderRevision (uri, Git.Revision{commitDate, authorName, subject, body}) =
-        L.li_ [L.class_ "revision"] $ do
-          void $ L.div_ [L.class_ "subject"] (L.b_ (L.toHtml subject))
-          void $ L.div_ [L.class_ "by-line"] $ do
-            L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
-            L.toHtml (renderRepoURL uri)
-          case body of
-            Nothing -> pass
-            Just body' -> L.pre_ [L.class_ "body"] $ L.toHtml body'
-      formatShortDate = toS . Time.formatTime Time.defaultTimeLocale "%e %b"
-      renderRepoURL (Git.URI uri) =
-        let path = toS $ uriPath uri
-            withoutGit = fromMaybe path (Text.stripSuffix ".git" path)
-            cleanPath = fromMaybe withoutGit (Text.stripPrefix "/weaveworks/" withoutGit)
-        in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] (L.toHtml cleanPath)
-      renderRepoURL uri@(Git.SCP _) = L.toHtml (Git.toText uri)
+        L.ul_ [L.class_ "revisions"] $ foldMap (uncurry renderChangelogRevision) revs
 
+
+-- XXX: Is there a better return type for this?
+-- | Render a Git revision, intended to be part of a changelog, as HTML.
+--
+-- Idea is to show everything we can about who made it and why, so that people
+-- reviewing it can gauge its user impact.
+renderChangelogRevision
+  :: Monad m
+  => Git.URL  -- ^ The URL of the Git repository that this revision is from
+  -> Git.Revision  -- ^ The revision to render
+  -> L.HtmlT m ()
+renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, body} = do
+  let gitHubRepo = GitHub.repositoryFromGitURL gitUri
+  L.li_ [L.class_ "revision"] $ do
+    void $ L.div_ [L.class_ "subject"] $ do
+      case gitHubRepo of
+        Just repo -> do
+          mapM_ (linkToIssue repo) (GitHub.findIssues subject)
+          " "
+        Nothing -> pass
+      L.b_ (L.toHtml subject)
+    void $ L.div_ [L.class_ "by-line"] $ do
+      L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
+      case gitHubRepo of
+        Just repo -> renderRepoURL repo
+        Nothing -> L.toHtml (Git.toText gitUri)
+    case body of
+      Nothing -> pass
+      Just body' -> L.pre_ [L.class_ "body"] $ L.toHtml body'
+  where
+    formatShortDate = toS . Time.formatTime Time.defaultTimeLocale "%e %b"
+
+    renderRepoURL repo =
+      let uri = GitHub.websiteURI repo
+      in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] $
+         L.toHtml $ repoShortName repo
+
+    -- | How we want a repository to appear on the page. If it's a
+    -- @weaveworks@ repository, just refer to it by name. Otherwise, by
+    -- @org/name@ if it's a GitHub repo. Otherwise, refuse to guess.
+    repoShortName GitHub.Repository{organization, repositoryName} =
+      case organization of
+        "weaveworks" -> repositoryName
+        _ -> organization <> "/" <> repositoryName
+
+    linkToIssue repo issue =
+      let uri = GitHub.websiteURI repo
+          issueURI = uri { uriPath = uriPath uri <> "/issues/" <> show issue }
+          issueRef = repoShortName repo <> "#" <> show issue
+      in L.a_ [L.href_ (toS $ uriToString (const "") issueURI "")] (L.toHtml issueRef)
 
 -- | Format a UTC time in the standard way for our HTML.
 --
