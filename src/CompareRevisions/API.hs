@@ -11,6 +11,8 @@ module CompareRevisions.API
   ( API
   , api
   , server
+  , Config
+  , flags
   ) where
 
 import Protolude hiding (diff)
@@ -22,6 +24,8 @@ import qualified Data.Time as Time
 import qualified Data.Time.Calendar.WeekDate as WeekDate
 import qualified Lucid as L
 import Network.URI (URI(..), parseRelativeReference, relativeTo, uriToString)
+import qualified Network.URI as URI
+import qualified Options.Applicative as Opt
 import Servant (Server, Handler)
 import Servant.API (Capture, Get, JSON, QueryParam, (:<|>)(..), (:>))
 import Servant.HTML.Lucid (HTML)
@@ -32,6 +36,21 @@ import qualified CompareRevisions.Engine as Engine
 import qualified CompareRevisions.Git as Git
 import qualified CompareRevisions.GitHub as GitHub
 import qualified CompareRevisions.Kube as Kube
+
+
+newtype Config = Config { externalURL :: URI } deriving (Eq, Show)
+
+flags :: Opt.Parser Config
+flags =
+  Config
+  <$> Opt.option
+        (Opt.eitherReader parseURI)
+        (fold
+           [ Opt.long "external-url"
+           , Opt.help "Publicly visible base URL of the service."
+           ])
+  where
+    parseURI = note "Must be an absolute URL" . URI.parseAbsoluteURI
 
 -- | compare-revisions API definition.
 type API
@@ -50,12 +69,12 @@ api :: Proxy API
 api = Proxy
 
 -- | API implementation.
-server :: URI -> Engine.ClusterDiffer -> Server API
-server externalURL clusterDiffer
+server :: Config -> Engine.ClusterDiffer -> Server API
+server config clusterDiffer
   = images clusterDiffer
   :<|> revisions clusterDiffer
   :<|> changes clusterDiffer
-  :<|> rootPage externalURL clusterDiffer
+  :<|> rootPage (externalURL config) clusterDiffer
 
 rootPage :: HasCallStack => URI -> Engine.ClusterDiffer -> Handler RootPage
 rootPage externalURL differ = do
