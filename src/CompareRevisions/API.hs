@@ -23,10 +23,12 @@ import qualified Data.Map as Map
 import qualified Data.Time as Time
 import qualified Data.Time.Calendar.WeekDate as WeekDate
 import qualified Lucid as L
+import qualified Network.HTTP.Types as HTTP
 import Network.URI (URI(..), parseRelativeReference, relativeTo, uriToString)
+import qualified Network.Wai as Wai
 import qualified Network.URI as URI
 import qualified Options.Applicative as Opt
-import Servant (Server, Handler)
+import Servant (Server, Handler, Application)
 import Servant.API (Capture, Get, JSON, QueryParam, (:<|>)(..), (:>), Raw)
 import Servant.HTML.Lucid (HTML)
 import Servant.Server (ServantErr(..), Tagged(..), err404, err500, hoistServer)
@@ -43,7 +45,7 @@ import qualified CompareRevisions.Kube as Kube
 data Config
   = Config
   { externalURL :: URI  -- ^ Publicly visible base URL of the service, used for making links.
-  , staticDir :: FilePath  -- ^ Directory containing static resources
+  , staticDir :: Maybe FilePath  -- ^ Directory containing static resources
   } deriving (Eq, Show)
 
 flags :: Opt.Parser Config
@@ -55,12 +57,13 @@ flags =
            [ Opt.long "external-url"
            , Opt.help "Publicly visible base URL of the service."
            ])
-  <*> Opt.option
-        Opt.str
+  <*> optional
+      (Opt.option
+         Opt.str
         (fold
           [ Opt.long "static-dir"
           , Opt.help "Path to directory containing static resources."
-          ])
+          ]))
   where
     parseURI = note "Must be an absolute URL" . URI.parseAbsoluteURI
 
@@ -90,8 +93,14 @@ server config clusterDiffer
       :<|> revisions clusterDiffer
       :<|> changes clusterDiffer
       -- servant 0.14 makes this 'tagged' dance unnecessary.
-      :<|> Tagged (unTagged (serveDirectoryWebApp (staticDir config)))
+      :<|> Tagged (unTagged (serveStaticDir (staticDir config)))
       :<|> rootPage clusterDiffer )
+
+-- | Serve a static directory, if we're given one. If not, serve an endpoint
+-- that returns 404 for everything.
+serveStaticDir :: Maybe FilePath -> Tagged Handler Application
+serveStaticDir (Just path) = serveDirectoryWebApp path
+serveStaticDir _ = Tagged $ \_ respond -> respond $ Wai.responseLBS HTTP.status404 [] "No static resources supplied."
 
 -- | The root page of the application. Links to everything else.
 rootPage :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler (Page RootPage)
