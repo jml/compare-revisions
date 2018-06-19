@@ -75,10 +75,11 @@ server config clusterDiffer
     ( images clusterDiffer
       :<|> revisions clusterDiffer
       :<|> changes clusterDiffer
-      :<|> rootPage (externalURL config) clusterDiffer )
+      :<|> rootPage clusterDiffer )
 
-rootPage :: HasCallStack => URI -> Engine.ClusterDiffer -> ReaderT Config Handler RootPage
-rootPage externalURL differ = do
+rootPage :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler RootPage
+rootPage differ = do
+  Config{externalURL} <- ask
   envs <- findEnvironments <$> Engine.getConfig differ
   pure (RootPage externalURL envs)
 
