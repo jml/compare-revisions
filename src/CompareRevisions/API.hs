@@ -29,7 +29,7 @@ import qualified Options.Applicative as Opt
 import Servant (Server, Handler)
 import Servant.API (Capture, Get, JSON, QueryParam, (:<|>)(..), (:>))
 import Servant.HTML.Lucid (HTML)
-import Servant.Server (ServantErr(..), err404, err500)
+import Servant.Server (ServantErr(..), err404, err500, hoistServer)
 
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Engine as Engine
@@ -71,22 +71,23 @@ api = Proxy
 -- | API implementation.
 server :: Config -> Engine.ClusterDiffer -> Server API
 server config clusterDiffer
-  = images clusterDiffer
-  :<|> revisions clusterDiffer
-  :<|> changes clusterDiffer
-  :<|> rootPage (externalURL config) clusterDiffer
+  = hoistServer api (`runReaderT` config)
+    ( images clusterDiffer
+      :<|> revisions clusterDiffer
+      :<|> changes clusterDiffer
+      :<|> rootPage (externalURL config) clusterDiffer )
 
-rootPage :: HasCallStack => URI -> Engine.ClusterDiffer -> Handler RootPage
+rootPage :: HasCallStack => URI -> Engine.ClusterDiffer -> ReaderT Config Handler RootPage
 rootPage externalURL differ = do
   envs <- findEnvironments <$> Engine.getConfig differ
   pure (RootPage externalURL envs)
 
 -- | Show how images differ between two environments.
-images :: HasCallStack => Engine.ClusterDiffer -> Handler ImageDiffs
+images :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler ImageDiffs
 images = map (ImageDiffs . map Engine.imageDiffs) . Engine.getCurrentDifferences
 
 -- | Show the revisions that are in one environment but not others.
-revisions :: Engine.ClusterDiffer -> Handler RevisionDiffs
+revisions :: Engine.ClusterDiffer -> ReaderT Config Handler RevisionDiffs
 revisions differ = do
   diff <- Engine.getCurrentDifferences differ
   pure . RevisionDiffs $ Engine.revisionDiffs <$> diff
@@ -108,7 +109,7 @@ revisions differ = do
 --   - Use Engine.compareRevisions to find the git revisions
 --   - Organize this information reverse chronologically,
 --     probably not even grouped be images.
-changes :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> Handler ChangeLog
+changes :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> ReaderT Config Handler ChangeLog
 changes differ env start' = do
   envs <- findEnvironments <$> Engine.getConfig differ
   envPath <- case Map.lookup env envs of
