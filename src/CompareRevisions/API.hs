@@ -27,9 +27,11 @@ import Network.URI (URI(..), parseRelativeReference, relativeTo, uriToString)
 import qualified Network.URI as URI
 import qualified Options.Applicative as Opt
 import Servant (Server, Handler)
-import Servant.API (Capture, Get, JSON, QueryParam, (:<|>)(..), (:>))
+import Servant.API (Capture, Get, JSON, QueryParam, (:<|>)(..), (:>), Raw)
 import Servant.HTML.Lucid (HTML)
-import Servant.Server (ServantErr(..), err404, err500, hoistServer)
+import Servant.Server (ServantErr(..), Tagged(..), err404, err500, hoistServer)
+import Servant.Utils.Links (linkURI, safeLink)
+import Servant.Utils.StaticFiles (serveDirectoryWebApp)
 
 import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Engine as Engine
@@ -38,7 +40,11 @@ import qualified CompareRevisions.GitHub as GitHub
 import qualified CompareRevisions.Kube as Kube
 
 
-newtype Config = Config { externalURL :: URI } deriving (Eq, Show)
+data Config
+  = Config
+  { externalURL :: URI  -- ^ Publicly visible base URL of the service, used for making links.
+  , staticDir :: FilePath  -- ^ Directory containing static resources
+  } deriving (Eq, Show)
 
 flags :: Opt.Parser Config
 flags =
@@ -49,14 +55,22 @@ flags =
            [ Opt.long "external-url"
            , Opt.help "Publicly visible base URL of the service."
            ])
+  <*> Opt.option
+        Opt.str
+        (fold
+          [ Opt.long "static-dir"
+          , Opt.help "Path to directory containing static resources."
+          ])
   where
     parseURI = note "Must be an absolute URL" . URI.parseAbsoluteURI
+
 
 -- | compare-revisions API definition.
 type API
   = "images" :> Get '[HTML, JSON] (Page ImageDiffs)
   :<|> "revisions" :> Get '[HTML] (Page RevisionDiffs)
   :<|> Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] (Page ChangeLog)
+  :<|> "static" :> Raw
   :<|> Get '[HTML] (Page RootPage)
 
 -- TODO: Also want to show:
@@ -75,14 +89,16 @@ server config clusterDiffer
     ( images clusterDiffer
       :<|> revisions clusterDiffer
       :<|> changes clusterDiffer
+      -- servant 0.14 makes this 'tagged' dance unnecessary.
+      :<|> Tagged (unTagged (serveDirectoryWebApp (staticDir config)))
       :<|> rootPage clusterDiffer )
 
 -- | The root page of the application. Links to everything else.
 rootPage :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler (Page RootPage)
 rootPage differ = do
-  Config{externalURL} <- ask
+  config <- ask
   envs <- findEnvironments <$> Engine.getConfig differ
-  makePage "compare-revisions" (RootPage externalURL envs)
+  makePage "compare-revisions" (RootPage (externalURL config) envs)
 
 -- | Show how images differ between two environments.
 images :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler (Page ImageDiffs)
@@ -142,13 +158,16 @@ findEnvironments cfg = Map.fromList [(Config.name env, Config.path env) | env <-
 -- | A standard HTML page in the compare-revisions app.
 data Page a
   = Page
-  { title :: Text  -- ^ The title of the page
+  { config :: Config -- ^ The configuration for the app
+  , title :: Text  -- ^ The title of the page
   , content :: a  -- ^ The main content
   } deriving (Eq, Show)
 
 -- | Make a standard HTML page in the compare revisions app.
-makePage :: Monad m => Text -> body -> m (Page body)
-makePage title body = pure (Page title body)
+makePage :: MonadReader Config m => Text -> body -> m (Page body)
+makePage title body = do
+  config <- ask
+  pure (Page config title body)
 
 instance ToJSON a => ToJSON (Page a) where
   -- Since `Page` is only wrapping values to provide a standard HTML wrapper,
@@ -158,9 +177,12 @@ instance ToJSON a => ToJSON (Page a) where
 
 instance L.ToHtml a => L.ToHtml (Page a) where
   toHtmlRaw = L.toHtml
-  toHtml Page{title, content} =
+  toHtml Page{config, title, content} =
     L.doctypehtml_ $ do
-      L.head_ $ L.title_ (L.toHtml title)
+      L.head_ $ do
+        L.meta_ [L.name_ "viewport", L.content_ "width=device-width, initial-scale=1, shrink-to-fit=no"]
+        L.link_ [L.rel_ "stylesheet", L.href_ stylesheetURI]
+        L.title_ (L.toHtml title)
       L.body_ $ do
         L.h1_ (L.toHtml title)
         L.toHtml content
@@ -169,6 +191,9 @@ instance L.ToHtml a => L.ToHtml (Page a) where
           L.a_ [L.href_ sourceURL] (L.toHtml sourceURL)
     where
       sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
+      stylesheetURI = show (linkURI (safeLink api staticResources) `relativeTo` externalURL config) <> "/style.css"
+      staticResources = Proxy :: Proxy ("static" :> Raw)
+
 
 -- | Represents the root page of the service.
 data RootPage = RootPage URI (Map Config.EnvironmentName FilePath) deriving (Eq, Ord, Show)
