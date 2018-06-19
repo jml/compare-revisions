@@ -1,9 +1,10 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
 -- | API definition for compare-revisions.
@@ -24,7 +25,7 @@ import qualified Data.Time as Time
 import qualified Data.Time.Calendar.WeekDate as WeekDate
 import qualified Lucid as L
 import qualified Network.HTTP.Types as HTTP
-import Network.URI (URI(..), parseRelativeReference, relativeTo)
+import Network.URI (URI(..), relativeTo)
 import qualified Network.Wai as Wai
 import qualified Network.URI as URI
 import qualified Options.Applicative as Opt
@@ -178,6 +179,7 @@ makePage title body = do
   config <- ask
   pure (Page config title body)
 
+
 instance ToJSON a => ToJSON (Page a) where
   -- Since `Page` is only wrapping values to provide a standard HTML wrapper,
   -- it makes sense for the JSON implementation to just be the JSON of the
@@ -213,20 +215,20 @@ instance L.ToHtml RootPage where
   toHtml (RootPage externalURL envs) = do
     L.h2_ "Between environments"
     L.ul_ $ do
-      L.li_ $ L.a_ [L.href_ (getURL "images")] "Images"
-      L.li_ $ L.a_ [L.href_ (getURL "revisions")] "Revisions"
+      -- servant 0.14 would allow us to use safeLink', which would let us build a helper to reduce duplication.
+      L.li_ $ L.a_ [L.href_ (show (linkURI (safeLink api imagesEndpoint)))] "Images"
+      L.li_ $ L.a_ [L.href_ (show (linkURI (safeLink api revisionsEndpoint)))] "Revisions"
     L.h2_ "Within environments"
-    L.ul_ $ sequence_ [ L.li_ $ L.a_ [L.href_ (getURL (toS env <> "/changes"))] (L.toHtml env)
+    L.ul_ $ sequence_ [ L.li_ $ L.a_ [L.href_ (show (linkURI (safeLink api changelogEndpoint env Nothing)))] (L.toHtml env)
                       | env <- Map.keys envs ]
     L.h2_ "Ops"
     L.ul_ $
-      L.li_ $ L.a_ [L.href_ (getURL "metrics")] (L.code_ "metrics")
+      L.li_ $ L.a_ [L.href_ (show externalURL <> "/metrics")] (L.code_ "metrics")
     where
-      -- TODO: Use safeLink
-      getURL path =
-        case parseRelativeReference path of
-          Nothing -> panic $ toS path <> " is not a valid relative URI"
-          Just path' -> show (path' `relativeTo` externalURL)
+      imagesEndpoint = Proxy :: Proxy ("images" :> Get '[HTML, JSON] (Page ImageDiffs))
+      revisionsEndpoint = Proxy :: Proxy ("revisions" :> Get '[HTML] (Page RevisionDiffs))
+      changelogEndpoint = Proxy :: Proxy (Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] (Page ChangeLog))
+
 
 -- | The images that differ between Kubernetes objects.
 -- Newtype wrapper is to let us provide nice HTML.
