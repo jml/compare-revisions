@@ -24,7 +24,7 @@ import qualified Data.Time as Time
 import qualified Data.Time.Calendar.WeekDate as WeekDate
 import qualified Lucid as L
 import qualified Network.HTTP.Types as HTTP
-import Network.URI (URI(..), parseRelativeReference, relativeTo, uriToString)
+import Network.URI (URI(..), parseRelativeReference, relativeTo)
 import qualified Network.Wai as Wai
 import qualified Network.URI as URI
 import qualified Options.Applicative as Opt
@@ -226,7 +226,7 @@ instance L.ToHtml RootPage where
       getURL path =
         case parseRelativeReference path of
           Nothing -> panic $ toS path <> " is not a valid relative URI"
-          Just path' -> toS (uriToString identity (path' `relativeTo` externalURL) "")
+          Just path' -> show (path' `relativeTo` externalURL)
 
 -- | The images that differ between Kubernetes objects.
 -- Newtype wrapper is to let us provide nice HTML.
@@ -382,7 +382,7 @@ renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, bod
 
     renderRepoURL repo =
       let uri = GitHub.websiteURI repo
-      in L.a_ [L.href_ (toS $ uriToString (const "") uri "")] $
+      in L.a_ [L.href_ (show uri)] $
          L.toHtml $ repoShortName repo
 
     -- | How we want a repository to appear on the page. If it's a
@@ -397,7 +397,7 @@ renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, bod
       let uri = GitHub.websiteURI repo
           issueURI = uri { uriPath = uriPath uri <> "/issues/" <> show issue }
           issueRef = repoShortName repo <> "#" <> show issue
-      in L.a_ [L.href_ (toS $ uriToString (const "") issueURI "")] (L.toHtml issueRef)
+      in L.a_ [L.href_ (show issueURI)] (L.toHtml issueRef)
 
 
 -- | Format a UTC time in the standard way for our HTML.
