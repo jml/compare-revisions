@@ -54,10 +54,10 @@ flags =
 
 -- | compare-revisions API definition.
 type API
-  = "images" :> Get '[HTML, JSON] ImageDiffs
-  :<|> "revisions" :> Get '[HTML] RevisionDiffs
-  :<|> Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] ChangeLog
-  :<|> Get '[HTML] RootPage
+  = "images" :> Get '[HTML, JSON] (Page ImageDiffs)
+  :<|> "revisions" :> Get '[HTML] (Page RevisionDiffs)
+  :<|> Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] (Page ChangeLog)
+  :<|> Get '[HTML] (Page RootPage)
 
 -- TODO: Also want to show:
 --  - current config
@@ -77,21 +77,24 @@ server config clusterDiffer
       :<|> changes clusterDiffer
       :<|> rootPage clusterDiffer )
 
-rootPage :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler RootPage
+-- | The root page of the application. Links to everything else.
+rootPage :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler (Page RootPage)
 rootPage differ = do
   Config{externalURL} <- ask
   envs <- findEnvironments <$> Engine.getConfig differ
-  pure (RootPage externalURL envs)
+  makePage "compare-revisions" (RootPage externalURL envs)
 
 -- | Show how images differ between two environments.
-images :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler ImageDiffs
-images = map (ImageDiffs . map Engine.imageDiffs) . Engine.getCurrentDifferences
+images :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler (Page ImageDiffs)
+images differ = do
+  imageDiffs <- map (ImageDiffs . map Engine.imageDiffs) . Engine.getCurrentDifferences $ differ
+  makePage "compare-images" imageDiffs
 
 -- | Show the revisions that are in one environment but not others.
-revisions :: Engine.ClusterDiffer -> ReaderT Config Handler RevisionDiffs
+revisions :: Engine.ClusterDiffer -> ReaderT Config Handler (Page RevisionDiffs)
 revisions differ = do
   diff <- Engine.getCurrentDifferences differ
-  pure . RevisionDiffs $ Engine.revisionDiffs <$> diff
+  makePage "compare-revisions" (RevisionDiffs (Engine.revisionDiffs <$> diff))
 
 -- | Show recent changes to a particular cluster.
 --
@@ -109,8 +112,8 @@ revisions differ = do
 --   - Use Kube.getDifferingImages to find the images that differ
 --   - Use Engine.compareRevisions to find the git revisions
 --   - Organize this information reverse chronologically,
---     probably not even grouped be images.
-changes :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> ReaderT Config Handler ChangeLog
+--     probably not even grouped by images.
+changes :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> ReaderT Config Handler (Page ChangeLog)
 changes differ env start' = do
   envs <- findEnvironments <$> Engine.getConfig differ
   envPath <- case Map.lookup env envs of
@@ -126,7 +129,7 @@ changes differ env start' = do
   changelog' <- liftIO . runExceptT $ Engine.loadChanges differ envPath start
   case changelog' of
     Left err -> throwError $ err500 { errBody = "Could not load config repo: " <> show err }
-    Right changelog -> pure (ChangeLog env start changelog)
+    Right changelog -> makePage (env <> " :: changelog") (ChangeLog start changelog)
 
 
 -- | Find all of the environments in our configuration.
@@ -136,20 +139,36 @@ findEnvironments cfg = Map.fromList [(Config.name env, Config.path env) | env <-
     envs = [Config.sourceEnv repo, Config.targetEnv repo]
     repo = Config.configRepo cfg
 
+-- | A standard HTML page in the compare-revisions app.
+data Page a
+  = Page
+  { title :: Text  -- ^ The title of the page
+  , content :: a  -- ^ The main content
+  } deriving (Eq, Show)
 
--- | Wrap an HTML "page" with all of our standard boilerplate.
-standardPage :: Monad m => Text -> L.HtmlT m () -> L.HtmlT m ()
-standardPage title content =
-  L.doctypehtml_ $ do
-    L.head_ (L.title_ (L.toHtml title))
-    L.body_ $ do
-      L.h1_ (L.toHtml title)
-      content
-      L.p_ $ do
-        "Source code at "
-        L.a_ [L.href_ sourceURL] (L.toHtml sourceURL)
-  where
-    sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
+-- | Make a standard HTML page in the compare revisions app.
+makePage :: Monad m => Text -> body -> m (Page body)
+makePage title body = pure (Page title body)
+
+instance ToJSON a => ToJSON (Page a) where
+  -- Since `Page` is only wrapping values to provide a standard HTML wrapper,
+  -- it makes sense for the JSON implementation to just be the JSON of the
+  -- underlying content.
+  toJSON Page{content} = toJSON content
+
+instance L.ToHtml a => L.ToHtml (Page a) where
+  toHtmlRaw = L.toHtml
+  toHtml Page{title, content} =
+    L.doctypehtml_ $ do
+      L.head_ $ L.title_ (L.toHtml title)
+      L.body_ $ do
+        L.h1_ (L.toHtml title)
+        L.toHtml content
+        L.p_ $ do
+          "Source code at "
+          L.a_ [L.href_ sourceURL] (L.toHtml sourceURL)
+    where
+      sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
 
 -- | Represents the root page of the service.
 data RootPage = RootPage URI (Map Config.EnvironmentName FilePath) deriving (Eq, Ord, Show)
@@ -157,19 +176,19 @@ data RootPage = RootPage URI (Map Config.EnvironmentName FilePath) deriving (Eq,
 -- | Very simple root HTML page.
 instance L.ToHtml RootPage where
   toHtmlRaw = L.toHtml
-  toHtml (RootPage externalURL envs) =
-    standardPage "compare-revisions" $ do
-      L.h2_ "Between environments"
-      L.ul_ $ do
-        L.li_ $ L.a_ [L.href_ (getURL "images")] "Images"
-        L.li_ $ L.a_ [L.href_ (getURL "revisions")] "Revisions"
-      L.h2_ "Within environments"
-      L.ul_ $ sequence_ [ L.li_ $ L.a_ [L.href_ (getURL (toS env <> "/changes"))] (L.toHtml env)
-                        | env <- Map.keys envs ]
-      L.h2_ "Ops"
-      L.ul_ $
-        L.li_ $ L.a_ [L.href_ (getURL "metrics")] (L.code_ "metrics")
+  toHtml (RootPage externalURL envs) = do
+    L.h2_ "Between environments"
+    L.ul_ $ do
+      L.li_ $ L.a_ [L.href_ (getURL "images")] "Images"
+      L.li_ $ L.a_ [L.href_ (getURL "revisions")] "Revisions"
+    L.h2_ "Within environments"
+    L.ul_ $ sequence_ [ L.li_ $ L.a_ [L.href_ (getURL (toS env <> "/changes"))] (L.toHtml env)
+                      | env <- Map.keys envs ]
+    L.h2_ "Ops"
+    L.ul_ $
+      L.li_ $ L.a_ [L.href_ (getURL "metrics")] (L.code_ "metrics")
     where
+      -- TODO: Use safeLink
       getURL path =
         case parseRelativeReference path of
           Nothing -> panic $ toS path <> " is not a valid relative URI"
@@ -193,19 +212,17 @@ instance ToJSON ImageDiffs where
 
 instance L.ToHtml ImageDiffs where
   toHtmlRaw = L.toHtml
-  toHtml (ImageDiffs diffs) = standardPage "compare-images" imageDiffs
+  toHtml (ImageDiffs diffs) =
+    case diffs of
+      Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
+      Just diffs' ->
+        L.table_ $ do
+          L.tr_ $ do
+            L.th_ "Image"
+            L.th_ "dev"
+            L.th_ "prod" -- TODO: Read the environment names from the data structure, rather than hardcoding
+          rows diffs'
     where
-      imageDiffs =
-        case diffs of
-          Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
-          Just diffs' ->
-            L.table_ $ do
-              L.tr_ $ do
-                L.th_ "Image"
-                L.th_ "dev"
-                L.th_ "prod" -- TODO: Read the environment names from the data structure, rather than hardcoding
-              rows diffs'
-
       rows diffs' = mconcat (map (L.tr_ . toRow) (flattenedImages diffs'))
       flattenedImages diffs' = sortOn Kube.getImageName (ordNub (fold diffs'))
 
@@ -226,13 +243,11 @@ newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.
 
 instance L.ToHtml RevisionDiffs where
   toHtmlRaw = L.toHtml
-  toHtml (RevisionDiffs clusterDiff) = standardPage "compare-revisions" byImage
+  toHtml (RevisionDiffs clusterDiff) =
+    case clusterDiff of
+      Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
+      Just diff -> foldMap renderImage (Map.toAscList diff)
     where
-      byImage =
-        case clusterDiff of
-          Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
-          Just diff -> foldMap renderImage (Map.toAscList diff)
-
       renderImage (name, revs) =
         L.h2_ (L.toHtml name) <> renderLogs revs
 
@@ -261,14 +276,13 @@ instance L.ToHtml RevisionDiffs where
 
 data ChangeLog
   = ChangeLog
-  { environment :: Config.EnvironmentName
-  , startDate :: Time.Day
+  { startDate :: Time.Day
   , changelog :: Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision]))
   } deriving (Show)
 
 instance L.ToHtml ChangeLog where
   toHtmlRaw = L.toHtml
-  toHtml ChangeLog{environment, startDate, changelog} = standardPage (environment <> " :: changelog") $ do
+  toHtml ChangeLog{startDate, changelog} = do
     L.p_ ("Since " <> L.toHtml (formatDate startDate))
     L.p_ ("Change with " <> L.code_ "?start=YYYY-MM-DD")
     let (thisWeek, lastWeek, rest) = groupedChanges
@@ -350,6 +364,7 @@ renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, bod
           issueURI = uri { uriPath = uriPath uri <> "/issues/" <> show issue }
           issueRef = repoShortName repo <> "#" <> show issue
       in L.a_ [L.href_ (toS $ uriToString (const "") issueURI "")] (L.toHtml issueRef)
+
 
 -- | Format a UTC time in the standard way for our HTML.
 --
