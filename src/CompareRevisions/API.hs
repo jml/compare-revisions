@@ -195,11 +195,13 @@ instance ToHtml a => ToHtml (Page a) where
         link_ [rel_ "stylesheet", href_ stylesheetURI]
         title_ (toHtml title)
       body_ $ do
-        h1_ (toHtml title)
-        toHtml content
-        p_ $ do
-          "Source code at "
-          a_ [href_ sourceURL] (toHtml sourceURL)
+        main_ [role_ "main"] $ do
+          h1_ (toHtml title)
+          toHtml content
+        footer_ [class_ "container"] $
+          p_ $ do
+            "Source code at "
+            a_ [href_ sourceURL] (toHtml sourceURL)
     where
       sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
       stylesheetURI = show (linkURI (safeLink api staticResources) `relativeTo` externalURL config) <> "/style.css"
