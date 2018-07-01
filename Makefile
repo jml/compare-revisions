@@ -26,9 +26,6 @@ OUTPUT_IMAGE_NAME := quay.io/weaveworks/compare-revisions
 UPTODATE_FILES := $(UPTODATE) compare-revisions-base/$(UPTODATE)
 IMAGE_NAMES := $(BASE_IMAGE_NAME) $(STACK_OUTPUT_IMAGE_NAME) $(OUTPUT_IMAGE_NAME)
 
-# A best guess at the inputs for our executable.
-HASKELL_FILES := $(shell find * -type f -name "*.hs" ! -path "tools/*" ! -path "vendor/*")
-
 # Build the base image
 compare-revisions-base/$(UPTODATE): compare-revisions-base/Dockerfile
 	$(SUDO) docker build -t $(BASE_IMAGE_NAME) compare-revisions-base/

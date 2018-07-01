@@ -1,5 +1,5 @@
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 -- | Go-style Durations.
 --
 -- These are measured in nanoseconds and can mostly be treated like numbers.
@@ -31,6 +31,7 @@ import Protolude hiding (second)
 
 import Data.Aeson (FromJSON(..), ToJSON(..), withText)
 import Data.Attoparsec.Text ((<?>), Parser, double, endOfInput, signed, parseOnly)
+import Data.String (String)
 import Test.QuickCheck (Arbitrary)
 
 -- | Delay a thread for a Duration.
@@ -67,18 +68,20 @@ hour = 60 * minute
 parseDuration :: Alternative f => Text -> f Duration
 parseDuration = hush . parseOnly (durationParser <* endOfInput)
 
+-- Using $> changes the types in ways that jml doesn't understand.
+{-# ANN durationParser ("HLint: ignore Use $>" :: String) #-}
 durationParser :: Parser Duration
 durationParser = signed (sum <$> some durationUnits)
   where
     durationUnits = mul <$> (multiplier <?> "multiplier") <*> (unit <?> "unit")
     multiplier = double
     unit =
-      "ns" *> pure nanosecond <|>
-      "us" *> pure microsecond <|>
-      "ms" *> pure millisecond <|>
-      "s" *> pure second <|>
-      "m" *> pure minute <|>
-      "h" *> pure hour
+      ("ns" *> pure nanosecond) <|>
+      ("us" *> pure microsecond) <|>
+      ("ms" *> pure millisecond) <|>
+      ("s" *> pure second) <|>
+      ("m" *> pure minute) <|>
+      ("h" *> pure hour)
 
 formatDuration :: Duration -> Text
 formatDuration d@(Duration n)

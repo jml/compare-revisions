@@ -344,7 +344,7 @@ instance L.ToHtml ChangeLog where
           [thisWeek] -> (thisWeek, [], [])
           [thisWeek, lastWeek] -> (thisWeek, lastWeek, [])
           thisWeek:lastWeek:rest -> (thisWeek, lastWeek, mconcat rest)
-      allChanges = reverse (sortOn (Git.commitDate . snd) (Map.keys (flattenChangelog changelog)))
+      allChanges = sortOn (Down . Git.commitDate . snd) (Map.keys (flattenChangelog changelog))
       groupByWeek = List.groupBy ((==) `on` (\(y, w, _) -> (y, w)) . WeekDate.toWeekDate . Time.utctDay . Git.commitDate . snd)
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
       renderRevisions revs =
