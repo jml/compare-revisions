@@ -23,7 +23,7 @@ import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Data.Time as Time
 import qualified Data.Time.Calendar.WeekDate as WeekDate
-import qualified Lucid as L
+import Lucid -- Importing unqualified because Lucid module is designed that way.
 import qualified Network.HTTP.Types as HTTP
 import Network.URI (URI(..), relativeTo)
 import qualified Network.Wai as Wai
@@ -186,20 +186,20 @@ instance ToJSON a => ToJSON (Page a) where
   -- underlying content.
   toJSON Page{content} = toJSON content
 
-instance L.ToHtml a => L.ToHtml (Page a) where
-  toHtmlRaw = L.toHtml
+instance ToHtml a => ToHtml (Page a) where
+  toHtmlRaw = toHtml
   toHtml Page{config, title, content} =
-    L.doctypehtml_ $ do
-      L.head_ $ do
-        L.meta_ [L.name_ "viewport", L.content_ "width=device-width, initial-scale=1, shrink-to-fit=no"]
-        L.link_ [L.rel_ "stylesheet", L.href_ stylesheetURI]
-        L.title_ (L.toHtml title)
-      L.body_ $ do
-        L.h1_ (L.toHtml title)
-        L.toHtml content
-        L.p_ $ do
+    doctypehtml_ $ do
+      head_ $ do
+        meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1, shrink-to-fit=no"]
+        link_ [rel_ "stylesheet", href_ stylesheetURI]
+        title_ (toHtml title)
+      body_ $ do
+        h1_ (toHtml title)
+        toHtml content
+        p_ $ do
           "Source code at "
-          L.a_ [L.href_ sourceURL] (L.toHtml sourceURL)
+          a_ [href_ sourceURL] (toHtml sourceURL)
     where
       sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
       stylesheetURI = show (linkURI (safeLink api staticResources) `relativeTo` externalURL config) <> "/style.css"
@@ -210,20 +210,20 @@ instance L.ToHtml a => L.ToHtml (Page a) where
 data RootPage = RootPage URI (Map Config.EnvironmentName FilePath) deriving (Eq, Ord, Show)
 
 -- | Very simple root HTML page.
-instance L.ToHtml RootPage where
-  toHtmlRaw = L.toHtml
+instance ToHtml RootPage where
+  toHtmlRaw = toHtml
   toHtml (RootPage externalURL envs) = do
-    L.h2_ "Between environments"
-    L.ul_ $ do
+    h2_ "Between environments"
+    ul_ $ do
       -- servant 0.14 would allow us to use safeLink', which would let us build a helper to reduce duplication.
-      L.li_ $ L.a_ [L.href_ (show (linkURI (safeLink api imagesEndpoint)))] "Images"
-      L.li_ $ L.a_ [L.href_ (show (linkURI (safeLink api revisionsEndpoint)))] "Revisions"
-    L.h2_ "Within environments"
-    L.ul_ $ sequence_ [ L.li_ $ L.a_ [L.href_ (show (linkURI (safeLink api changelogEndpoint env Nothing)))] (L.toHtml env)
+      li_ $ a_ [href_ (show (linkURI (safeLink api imagesEndpoint)))] "Images"
+      li_ $ a_ [href_ (show (linkURI (safeLink api revisionsEndpoint)))] "Revisions"
+    h2_ "Within environments"
+    ul_ $ sequence_ [ li_ $ a_ [href_ (show (linkURI (safeLink api changelogEndpoint env Nothing)))] (toHtml env)
                       | env <- Map.keys envs ]
-    L.h2_ "Ops"
-    L.ul_ $
-      L.li_ $ L.a_ [L.href_ (show externalURL <> "/metrics")] (L.code_ "metrics")
+    h2_ "Ops"
+    ul_ $
+      li_ $ a_ [href_ (show externalURL <> "/metrics")] (code_ "metrics")
     where
       imagesEndpoint = Proxy :: Proxy ("images" :> Get '[HTML, JSON] (Page ImageDiffs))
       revisionsEndpoint = Proxy :: Proxy ("revisions" :> Get '[HTML] (Page RevisionDiffs))
@@ -246,28 +246,28 @@ instance ToJSON ImageDiffs where
                        ]
         )
 
-instance L.ToHtml ImageDiffs where
-  toHtmlRaw = L.toHtml
+instance ToHtml ImageDiffs where
+  toHtmlRaw = toHtml
   toHtml (ImageDiffs diffs) =
     case diffs of
-      Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
+      Nothing -> p_ (toHtml ("No data yet" :: Text))
       Just diffs' ->
-        L.table_ $ do
-          L.tr_ $ do
-            L.th_ "Image"
-            L.th_ "dev"
-            L.th_ "prod" -- TODO: Read the environment names from the data structure, rather than hardcoding
+        table_ $ do
+          tr_ $ do
+            th_ "Image"
+            th_ "dev"
+            th_ "prod" -- TODO: Read the environment names from the data structure, rather than hardcoding
           rows diffs'
     where
-      rows diffs' = mconcat (map (L.tr_ . toRow) (flattenedImages diffs'))
+      rows diffs' = mconcat (map (tr_ . toRow) (flattenedImages diffs'))
       flattenedImages diffs' = sortOn Kube.getImageName (ordNub (fold diffs'))
 
-      toRow (Kube.ImageAdded name label) = nameCell name <> labelCell label <> L.td_ "ADDED"
+      toRow (Kube.ImageAdded name label) = nameCell name <> labelCell label <> td_ "ADDED"
       toRow (Kube.ImageChanged name oldLabel newLabel) = nameCell name <> labelCell oldLabel <> labelCell newLabel
-      toRow (Kube.ImageRemoved name label) = nameCell name <> L.td_ "REMOVED" <> labelCell label
+      toRow (Kube.ImageRemoved name label) = nameCell name <> td_ "REMOVED" <> labelCell label
 
-      nameCell = L.td_ . L.toHtml
-      labelCell = L.td_ . L.toHtml . fromMaybe "<no label>"
+      nameCell = td_ . toHtml
+      labelCell = td_ . toHtml . fromMaybe "<no label>"
 
 
 -- | The revisions that differ between images.
@@ -277,37 +277,37 @@ newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.
 
 -- TODO: JSON version of Revisions.
 
-instance L.ToHtml RevisionDiffs where
-  toHtmlRaw = L.toHtml
+instance ToHtml RevisionDiffs where
+  toHtmlRaw = toHtml
   toHtml (RevisionDiffs clusterDiff) =
     case clusterDiff of
-      Nothing -> L.p_ (L.toHtml ("No data yet" :: Text))
+      Nothing -> p_ (toHtml ("No data yet" :: Text))
       Just diff -> foldMap renderImage (Map.toAscList diff)
     where
       renderImage (name, revs) =
-        L.h2_ (L.toHtml name) <> renderLogs revs
+        h2_ (toHtml name) <> renderLogs revs
 
       renderLogs (Left (Engine.NoConfigForImage _)) =
-        L.p_ (L.toHtml ("No repository configured for image" :: Text))
+        p_ (toHtml ("No repository configured for image" :: Text))
       renderLogs (Left err) =
-        L.pre_ (L.toHtml (show err :: Text))
+        pre_ (toHtml (show err :: Text))
       renderLogs (Right (_, [])) =
-        L.p_ (L.toHtml ("No revisions in range" :: Text))
+        p_ (toHtml ("No revisions in range" :: Text))
       renderLogs (Right (_, revs)) =
-        L.table_ $ do
-          L.tr_ $ do
-            L.th_ "SHA-1"
-            L.th_ "Date"
-            L.th_ "Author"
-            L.th_ "Subject"
+        table_ $ do
+          tr_ $ do
+            th_ "SHA-1"
+            th_ "Date"
+            th_ "Author"
+            th_ "Subject"
           foldMap renderRevision revs
 
       renderRevision rev@Git.Revision{..} =
-        L.tr_ $
-          L.td_ (L.toHtml (Git.abbrevHash rev)) <>
-          L.td_ (L.toHtml (formatDateAndTime commitDate)) <>
-          L.td_ (L.toHtml authorName) <>
-          L.td_ (L.toHtml subject)
+        tr_ $
+          td_ (toHtml (Git.abbrevHash rev)) <>
+          td_ (toHtml (formatDateAndTime commitDate)) <>
+          td_ (toHtml authorName) <>
+          td_ (toHtml subject)
 
 
 data ChangeLog
@@ -316,26 +316,26 @@ data ChangeLog
   , changelog :: Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision]))
   } deriving (Show)
 
-instance L.ToHtml ChangeLog where
-  toHtmlRaw = L.toHtml
+instance ToHtml ChangeLog where
+  toHtmlRaw = toHtml
   toHtml ChangeLog{startDate, changelog} = do
-    L.p_ ("Since " <> L.toHtml (formatDate startDate))
-    L.p_ ("Change with " <> L.code_ "?start=YYYY-MM-DD")
+    p_ ("Since " <> toHtml (formatDate startDate))
+    p_ ("Change with " <> code_ "?start=YYYY-MM-DD")
     let (thisWeek, lastWeek, rest) = groupedChanges
     case thisWeek of
-      [] -> L.p_ "No changes in range"
+      [] -> p_ "No changes in range"
       revs -> do
-        L.h2_ (L.toHtml ("This week (" <> show (length revs) <> ")" :: Text))
+        h2_ (toHtml ("This week (" <> show (length revs) <> ")" :: Text))
         renderRevisions revs
     case lastWeek of
       [] -> pass
       revs -> do
-        L.h2_ (L.toHtml ("Last week (" <> show (length revs) <> ")" :: Text))
+        h2_ (toHtml ("Last week (" <> show (length revs) <> ")" :: Text))
         renderRevisions revs
     case rest of
       [] -> pass
       revs -> do
-        L.h2_ (L.toHtml ("Earlier (" <> show (length revs) <> ")" :: Text))
+        h2_ (toHtml ("Earlier (" <> show (length revs) <> ")" :: Text))
         renderRevisions revs
     where
       groupedChanges =
@@ -348,11 +348,11 @@ instance L.ToHtml ChangeLog where
       groupByWeek = List.groupBy ((==) `on` (\(y, w, _) -> (y, w)) . WeekDate.toWeekDate . Time.utctDay . Git.commitDate . snd)
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
       renderRevisions revs =
-        L.ul_ [L.class_ "revisions"] $ foldMap (uncurry renderChangelogRevision) revs
+        ul_ [class_ "revisions"] $ foldMap (uncurry renderChangelogRevision) revs
 
 
 -- XXX: Is there a better return type for this?
--- | Render a Git revision, intended to be part of a changelog, as HTML.
+-- | Render a Git revision, intended to be part of a changelog, as HTM
 --
 -- Idea is to show everything we can about who made it and why, so that people
 -- reviewing it can gauge its user impact.
@@ -360,32 +360,32 @@ renderChangelogRevision
   :: Monad m
   => Git.URL  -- ^ The URL of the Git repository that this revision is from
   -> Git.Revision  -- ^ The revision to render
-  -> L.HtmlT m ()
+  -> HtmlT m ()
 renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, body} = do
   let gitHubRepo = GitHub.repositoryFromGitURL gitUri
-  L.li_ [L.class_ "revision"] $ do
-    void $ L.div_ [L.class_ "subject"] $ do
+  li_ [class_ "revision"] $ do
+    void $ div_ [class_ "subject"] $ do
       case gitHubRepo of
         Just repo -> do
           mapM_ (linkToIssue repo) (GitHub.findIssues subject)
           " "
         Nothing -> pass
-      L.b_ (L.toHtml subject)
-    void $ L.div_ [L.class_ "by-line"] $ do
-      L.toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
+      b_ (toHtml subject)
+    void $ div_ [class_ "by-line"] $ do
+      toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
       case gitHubRepo of
         Just repo -> renderRepoURL repo
-        Nothing -> L.toHtml (Git.toText gitUri)
+        Nothing -> toHtml (Git.toText gitUri)
     case body of
       Nothing -> pass
-      Just body' -> L.pre_ [L.class_ "body"] $ L.toHtml body'
+      Just body' -> pre_ [class_ "body"] $ toHtml body'
   where
     formatShortDate = toS . Time.formatTime Time.defaultTimeLocale "%e %b"
 
     renderRepoURL repo =
       let uri = GitHub.websiteURI repo
-      in L.a_ [L.href_ (show uri)] $
-         L.toHtml $ repoShortName repo
+      in a_ [href_ (show uri)] $
+         toHtml $ repoShortName repo
 
     -- | How we want a repository to appear on the page. If it's a
     -- @weaveworks@ repository, just refer to it by name. Otherwise, by
@@ -399,7 +399,7 @@ renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, bod
       let uri = GitHub.websiteURI repo
           issueURI = uri { uriPath = uriPath uri <> "/issues/" <> show issue }
           issueRef = repoShortName repo <> "#" <> show issue
-      in L.a_ [L.href_ (show issueURI)] (L.toHtml issueRef)
+      in a_ [href_ (show issueURI)] (toHtml issueRef)
 
 
 -- | Format a UTC time in the standard way for our HTML.
