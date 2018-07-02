@@ -4,6 +4,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -71,11 +72,18 @@ flags =
 
 -- | compare-revisions API definition.
 type API
-  = "images" :> Get '[HTML, JSON] (Page ImageDiffs)
-  :<|> "revisions" :> Get '[HTML] (Page RevisionDiffs)
-  :<|> Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] (Page ChangeLog)
-  :<|> "static" :> Raw
-  :<|> Get '[HTML] (Page RootPage)
+  = ImagesAPI
+  :<|> RevisionsAPI
+  :<|> ChangelogAPI
+  :<|> StaticAPI
+  :<|> RootAPI
+
+type ImagesAPI = "images" :> Get '[HTML, JSON] (Page ImageDiffs)
+type RevisionsAPI = "revisions" :> Get '[HTML] (Page RevisionDiffs)
+type ChangelogAPI = Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] (Page ChangeLog)
+type StaticAPI = "static" :> Raw
+type RootAPI = Get '[HTML] (Page RootPage)
+
 
 -- TODO: Also want to show:
 --  - current config
@@ -202,8 +210,7 @@ instance ToHtml a => ToHtml (Page a) where
             a_ [href_ sourceURL] (toHtml sourceURL)
     where
       sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
-      stylesheetURI = show (linkURI (safeLink api staticResources) `relativeTo` externalURL config) <> "/style.css"
-      staticResources = Proxy :: Proxy ("static" :> Raw)
+      stylesheetURI = show (linkURI (safeLink api (Proxy @StaticAPI)) `relativeTo` externalURL config) <> "/style.css"
 
 
 -- | Represents the root page of the service.
@@ -222,16 +229,12 @@ instance ToHtml RootPage where
           h2_ "Between environments"
           ul_ $ do
             -- servant 0.14 would allow us to use safeLink', which would let us build a helper to reduce duplication.
-            li_ $ a_ [safeHref_ externalURL (safeLink api imagesEndpoint)] "Images"
-            li_ $ a_ [safeHref_ externalURL (safeLink api revisionsEndpoint)] "Revisions"
+            li_ $ a_ [safeHref_ externalURL (safeLink api (Proxy @ImagesAPI))] "Images"
+            li_ $ a_ [safeHref_ externalURL (safeLink api (Proxy @RevisionsAPI))] "Revisions"
         div_ [class_ "col-md-6"] $ do
           h2_ "Within environments"
-          ul_ $ sequence_ [ li_ $ a_ [href_ (show (linkURI (safeLink api changelogEndpoint env Nothing)))] (toHtml env)
+          ul_ $ sequence_ [ li_ $ a_ [safeHref_ externalURL (safeLink api (Proxy @ChangelogAPI) env Nothing)] (toHtml env)
                           | env <- Map.keys envs ]
-    where
-      imagesEndpoint = Proxy :: Proxy ("images" :> Get '[HTML, JSON] (Page ImageDiffs))
-      revisionsEndpoint = Proxy :: Proxy ("revisions" :> Get '[HTML] (Page RevisionDiffs))
-      changelogEndpoint = Proxy :: Proxy (Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] (Page ChangeLog))
 
 
   -- | Generate an href= attribute that links to something in the API, relative
