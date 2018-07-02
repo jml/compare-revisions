@@ -116,19 +116,19 @@ rootPage :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler (Page
 rootPage differ = do
   config <- ask
   envs <- findEnvironments <$> Engine.getConfig differ
-  makePage "compare-revisions" (RootPage (externalURL config) envs)
+  makePage "compare-revisions" (safeLink api (Proxy @RootAPI)) (RootPage (externalURL config) envs)
 
 -- | Show how images differ between two environments.
 images :: HasCallStack => Engine.ClusterDiffer -> ReaderT Config Handler (Page ImageDiffs)
 images differ = do
   imageDiffs <- map (ImageDiffs . map Engine.imageDiffs) . Engine.getCurrentDifferences $ differ
-  makePage "compare-images" imageDiffs
+  makePage "compare-images" (safeLink api (Proxy @ImagesAPI)) imageDiffs
 
 -- | Show the revisions that are in one environment but not others.
 revisions :: Engine.ClusterDiffer -> ReaderT Config Handler (Page RevisionDiffs)
 revisions differ = do
   diff <- Engine.getCurrentDifferences differ
-  makePage "compare-revisions" (RevisionDiffs (Engine.revisionDiffs <$> diff))
+  makePage "compare-revisions" (safeLink api (Proxy @RevisionsAPI)) (RevisionDiffs (Engine.revisionDiffs <$> diff))
 
 -- | Show recent changes to a particular cluster.
 --
@@ -163,7 +163,7 @@ changes differ env start' = do
   changelog' <- liftIO . runExceptT $ Engine.loadChanges differ envPath start
   case changelog' of
     Left err -> throwError $ err500 { errBody = "Could not load config repo: " <> show err }
-    Right changelog -> makePage (env <> " :: changelog") (ChangeLog start changelog)
+    Right changelog -> makePage (env <> " :: changelog") (safeLink api (Proxy @ChangelogAPI) env start') (ChangeLog start changelog)
 
 
 -- | Find all of the environments in our configuration.
@@ -178,14 +178,15 @@ data Page a
   = Page
   { config :: Config -- ^ The configuration for the app
   , title :: Text  -- ^ The title of the page
+  , currentURI :: URI   -- ^ URI of the page the user is currently viewing
   , content :: a  -- ^ The main content
   } deriving (Eq, Show)
 
 -- | Make a standard HTML page in the compare revisions app.
-makePage :: MonadReader Config m => Text -> body -> m (Page body)
-makePage title body = do
+makePage :: MonadReader Config m => Text -> Link -> body -> m (Page body)
+makePage title currentLink body = do
   config <- ask
-  pure (Page config title body)
+  pure (Page config title (linkURI currentLink) body)
 
 
 instance ToJSON a => ToJSON (Page a) where
@@ -196,13 +197,27 @@ instance ToJSON a => ToJSON (Page a) where
 
 instance ToHtml a => ToHtml (Page a) where
   toHtmlRaw = toHtml
-  toHtml Page{config, title, content} =
+  toHtml Page{config, title, currentURI, content} =
     doctypehtml_ $ do
       head_ $ do
         meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1, shrink-to-fit=no"]
         link_ [rel_ "stylesheet", href_ stylesheetURI]
         title_ (toHtml title)
       body_ $ do
+        nav_ [class_ "navbar navbar-expand-lg navbar-dark bg-dark"] $
+          div_ [class_ "collapse navbar-collapse"] $
+            ul_ [class_ "navbar-nav mr-auto"] $ do
+              let baseURL = externalURL config
+              forM_ navLinks $ \(link', label) ->
+                let destURL = safeHref_ baseURL link'
+                in if linkURI link' == currentURI
+                   then
+                     li_ [class_ "nav-item active"] $
+                     a_ [class_ "nav-link", destURL] $ do
+                       label
+                       " "
+                       span_ [class_ "sr-only"] "(current)"
+                   else li_ [class_ "nav-item"] $ a_ [class_ "nav-link", destURL] label
         main_ [role_ "main"] $ toHtml content
         footer_ [class_ "container"] $
           p_ $ do
@@ -211,6 +226,13 @@ instance ToHtml a => ToHtml (Page a) where
     where
       sourceURL = "https://github.com/weaveworks-experiments/compare-revisions"
       stylesheetURI = show (linkURI (safeLink api (Proxy @StaticAPI)) `relativeTo` externalURL config) <> "/style.css"
+      navLinks =
+        [ (safeLink api (Proxy @RootAPI), "Home")
+        , (safeLink api (Proxy @ImagesAPI), "Compare images")
+        , (safeLink api (Proxy @RevisionsAPI), "Compare revisions")
+        , (safeLink api (Proxy @ChangelogAPI) "dev" Nothing, "dev changelog")
+        , (safeLink api (Proxy @ChangelogAPI) "prod" Nothing, "prod changelog")
+        ]
 
 
 -- | Represents the root page of the service.
