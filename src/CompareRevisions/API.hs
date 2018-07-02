@@ -282,11 +282,10 @@ instance ToJSON ImageDiffs where
 
 instance ToHtml ImageDiffs where
   toHtmlRaw = toHtml
-  toHtml (ImageDiffs diffs) = do
+  toHtml (ImageDiffs diffs) =
     div_ [class_ "container"] $ do
       h1_ "Compare images"
-      p_ "How images differ between environments"
-    div_ [class_ "container"] $
+      p_ [class_ "lead"] "How images differ between environments"
       case diffs of
         Nothing -> noDataYet
         Just diffs' ->
@@ -321,11 +320,10 @@ newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.
 
 instance ToHtml RevisionDiffs where
   toHtmlRaw = toHtml
-  toHtml (RevisionDiffs clusterDiff) = do
+  toHtml (RevisionDiffs clusterDiff) =
     div_ [class_ "container"] $ do
       h1_ "Compare revisions"
-      p_ "Git log of how images differ between environments. Shows revisions that are on dev but not on prod."
-    div_ [class_ "container"] $
+      p_ [class_ "lead"] "Git log of how images differ between environments. Shows revisions that are on dev but not on prod."
       case clusterDiff of
         Nothing -> noDataYet
         Just diff -> foldMap renderImage (Map.toAscList diff)
@@ -336,7 +334,7 @@ instance ToHtml RevisionDiffs where
       renderLogs (Left (Engine.NoConfigForImage _)) =
         div_ [class_ "alert alert-warning", role_ "alert"] "No repository configured for image"
       renderLogs (Left err) =
-        div_ [class_ "alert alert-error", role_ "alert"] $ pre_ (toHtml (show err :: Text))
+        div_ [class_ "alert alert-danger", role_ "alert"] (p_ [class_ "text-monospace"] (toHtml (show err :: Text)))
       renderLogs (Right (_, [])) =
         div_ [class_ "alert alert-info", role_ "alert"] "No revisions in range"
       renderLogs (Right (_, revs)) =
@@ -367,7 +365,7 @@ instance ToHtml ChangeLog where
   toHtml ChangeLog{startDate, changelog} = do
     div_ [class_ "container"] $ do
       h1_ "Changelog"
-      p_ $ do
+      p_ [class_ "lead"] $ do
         "How the environment has changed since "
         toHtml (formatDate startDate)
       p_ ("Change with " <> code_ "?start=YYYY-MM-DD")
