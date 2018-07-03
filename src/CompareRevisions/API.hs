@@ -219,7 +219,8 @@ instance ToHtml a => ToHtml (Page a) where
                        span_ [class_ "sr-only"] "(current)"
                    else li_ [class_ "nav-item"] $ a_ [class_ "nav-link", destURL] label
         main_ [role_ "main"] $ toHtml content
-        footer_ [class_ "container"] $
+        footer_ [class_ "container"] $ do
+          hr_ empty
           p_ $ do
             "Source code at "
             a_ [href_ sourceURL] (toHtml sourceURL)
