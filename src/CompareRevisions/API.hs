@@ -284,7 +284,7 @@ instance ToJSON ImageDiffs where
 instance ToHtml ImageDiffs where
   toHtmlRaw = toHtml
   toHtml (ImageDiffs diffs) =
-    div_ [class_ "container"] $ do
+    div_ [class_ "container", standardPadding] $ do
       h1_ "Compare images"
       p_ [class_ "lead"] "How images differ between environments"
       case diffs of
@@ -322,7 +322,7 @@ newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.
 instance ToHtml RevisionDiffs where
   toHtmlRaw = toHtml
   toHtml (RevisionDiffs clusterDiff) =
-    div_ [class_ "container"] $ do
+    div_ [class_ "container", standardPadding] $ do
       h1_ "Compare revisions"
       p_ [class_ "lead"] "Git log of how images differ between environments. Shows revisions that are on dev but not on prod."
       case clusterDiff of
@@ -364,7 +364,7 @@ data ChangeLog
 instance ToHtml ChangeLog where
   toHtmlRaw = toHtml
   toHtml ChangeLog{startDate, changelog} = do
-    div_ [class_ "container"] $ do
+    div_ [class_ "container", standardPadding] $ do
       h1_ "Changelog"
       p_ [class_ "lead"] $ do
         "How the environment has changed since "
@@ -407,6 +407,12 @@ instance ToHtml ChangeLog where
       formatDate = Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat Nothing)
       renderRevisions = foldMap (uncurry renderChangelogRevision)
 
+
+-- | The standard padding at the top of every non-jumbotron page.
+--
+-- Used to ensure the content doesn't immediately run on to the navbar.
+standardPadding :: Attribute
+standardPadding = style_ "margin-top: 2rem"
 
 -- XXX: Is there a better return type for this?
 -- | Render a Git revision, intended to be part of a changelog, as HTML
