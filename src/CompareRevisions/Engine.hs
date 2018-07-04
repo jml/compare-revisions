@@ -1,6 +1,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TupleSections #-}
 -- | The heart of compare-revisions
 --
 -- The application's main core is 'ClusterDiffer', which is responsible for
@@ -17,10 +18,10 @@ module CompareRevisions.Engine
   , getCurrentDifferences
   ) where
 
-import Protolude hiding (diff, throwE)
+import Protolude hiding (diff)
 
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Concurrent.STM (TVar, newTVarIO, readTVar, writeTVar)
+import Control.Concurrent.STM (TVar, newTVarIO, readTVarIO, writeTVar)
 import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
 import qualified Data.Map as Map
@@ -103,16 +104,15 @@ newClusterDiffer Config.AppConfig{..} = do
               Right cfg -> pure cfg
   configVar <- liftIO (newTVarIO config)
   diff <- liftIO (newTVarIO empty)
-  metrics <- initMetrics
-  pure $ ClusterDiffer gitRepoDir configFile configVar diff metrics
+  ClusterDiffer gitRepoDir configFile configVar diff <$> initMetrics
 
 -- | Get the configuration of the differ.
 getConfig :: MonadIO io => ClusterDiffer -> io Config.ValidConfig
-getConfig ClusterDiffer{config} = liftIO . atomically . readTVar $ config
+getConfig ClusterDiffer{config} = liftIO . readTVarIO $ config
 
 -- | Get the most recently calculated differences from 'ClusterDiffer'.
 getCurrentDifferences :: MonadIO m => ClusterDiffer -> m (Maybe ClusterDiff)
-getCurrentDifferences = liftIO . atomically . readTVar . diff
+getCurrentDifferences = liftIO . readTVarIO . diff
 
 -- | Run a 'ClusterDiffer', looping forever, erroring out if the
 -- configuration file is invalid.
@@ -123,7 +123,7 @@ runClusterDiffer clusterDiffer@ClusterDiffer{..} =
     forever loop
   where
     loop = do
-      cfg <- atomically . readTVar $ config
+      cfg <- readTVarIO config
       result <- runExceptT $ updateClusterDiff clusterDiffer
       case result of
         Left err -> Log.warn' $ "Updating cluster diff failed: " <> show err
@@ -163,6 +163,7 @@ calculateClusterDiff differ@ClusterDiffer{gitRepoDir} = do
   let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = Config.configRepo cfg
   imageDiffs <- compareImages gitRepoDir url branch (Config.path sourceEnv) (Config.path targetEnv)
   revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
+  let _xs = null []
   pure (ClusterDiff revisionDiffs imageDiffs)
 
 
@@ -199,7 +200,7 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
             -- or restructuring the code to avoid the bug entirely,
             -- by passing the images through to `fetchGitLogs` and including them in the result.
             Map.empty
-          Just indexes -> Map.fromList (zip indexes (repeat ((\revs -> (repo, revs)) <$> revisions)))
+          Just indexes -> Map.fromList (zip indexes (repeat ((repo,) <$> revisions)))
   -- Include all the images we couldn't compare due to config defects.
   pure (imageToLogs <> map Left withErrors)
   where

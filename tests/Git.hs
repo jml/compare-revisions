@@ -4,6 +4,7 @@ module Git (tests) where
 import Protolude
 
 import qualified Data.ByteString.Char8 as ByteString
+import Data.String (String)
 import qualified Data.Time as Time
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -12,6 +13,8 @@ import Test.Tasty.Hspec (testSpec, describe, it, shouldBe)
 
 import qualified CompareRevisions.Git as Git
 import CompareRevisions.Server.Logging (withLogging, LogLevel(..))
+
+{-# ANN module ("HLint: ignore Reduce duplication" :: String) #-}
 
 tests :: IO TestTree
 tests = testSpec "Git" $ do

@@ -46,8 +46,7 @@ import qualified Data.Char as Char
 import qualified Data.Map as Map
 import qualified Data.Text as Text
 import Data.Yaml (ParseException, decodeFileEither)
-import Network.URI (URI, parseAbsoluteURI)
-import Options.Applicative (Parser, eitherReader, help, long, option, str)
+import Options.Applicative (Parser, help, long, option, str)
 import System.FilePath ((</>))
 
 import CompareRevisions.Duration (Duration)
@@ -61,7 +60,6 @@ import CompareRevisions.Validator (Validator, runValidator, throwE)
 data AppConfig = AppConfig
   { configFile :: FilePath
   , gitRepoDir :: FilePath
-  , externalURL :: URI  -- ^ The publicly visible URL of this service.
   } deriving (Eq, Show)
 
 -- | Where should we store the given Git repository?
@@ -92,14 +90,6 @@ flags =
            [ long "git-repo-dir"
            , help "Directory to store all the Git repositories in."
            ])
-  <*> option
-        (eitherReader parseURI)
-        (fold
-           [ long "external-url"
-           , help "Publicly visible base URL of the service."
-           ])
-  where
-    parseURI = note "Must be an absolute URL" . parseAbsoluteURI
 
 -- | User-specified configuration for compare-revisions.
 --
