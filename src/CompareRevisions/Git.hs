@@ -95,10 +95,10 @@ data Revision
 
 -- | Get the abbreviated hash for a revision.
 --
--- Does /not/ use the same algorithm as Git. Instead naively gets the last 8
+-- Does /not/ use the same algorithm as Git. Instead naively gets the first 8
 -- characters of the full hash.
 abbrevHash :: Revision -> Text
-abbrevHash = Text.takeEnd 8 . unHash . revisionHash
+abbrevHash = Text.take 8 . unHash . revisionHash
 
 -- | Parser for a "fuller" Git revision.
 --
