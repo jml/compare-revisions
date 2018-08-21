@@ -109,11 +109,11 @@ tests = testSpec "Git" $ do
               ]
 
 git :: MonadIO m => FilePath -> [Text] -> m ()
-git repo args = gitOp $ Git.runGitInRepo repo args
+git repo args = gitOp $ Git.runGitInRepo Nothing repo args
 
 gitInit :: MonadIO m => FilePath -> m ()
 gitInit repoDir = do
-  gitOp $ Git.runGit ["init", toS repoDir]
+  gitOp $ Git.runGit Nothing ["init", toS repoDir]
   git repoDir ["config", "user.name", "testuser"]
   git repoDir ["config", "user.email", "testuser@example.com"]
 

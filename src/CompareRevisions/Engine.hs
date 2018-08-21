@@ -74,7 +74,7 @@ data Error
 -- | The differences between two clusters at a point in time.
 data ClusterDiff
  = ClusterDiff
- { revisionDiffs :: Map Kube.ImageName (Either Error (Git.URL, [Git.Revision]))
+ { revisionDiffs :: Map Kube.ImageName (Either Error (Git.URLWithCredentials, [Git.Revision]))
  , imageDiffs :: Map Kube.KubeID [Kube.ImageDiff]
  }
  deriving (Show)
@@ -163,7 +163,6 @@ calculateClusterDiff differ@ClusterDiffer{gitRepoDir} = do
   let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = Config.configRepo cfg
   imageDiffs <- compareImages gitRepoDir url branch (Config.path sourceEnv) (Config.path targetEnv)
   revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
-  let _xs = null []
   pure (ClusterDiff revisionDiffs imageDiffs)
 
 
@@ -176,9 +175,9 @@ calculateClusterDiff differ@ClusterDiffer{gitRepoDir} = do
 compareRevisions
   :: MonadIO m
   => FilePath  -- ^ Path on disk to where all the Git repositories are.
-  -> Map Kube.ImageName (Config.ImageConfig Config.PolicyConfig)  -- ^ How we go from the image name to Git.
+  -> Map Kube.ImageName Config.ImageConfig  -- ^ How we go from the image name to Git.
   -> [Kube.ImageDiff]  -- ^ A set of differences between images.
-  -> m (Map Kube.ImageName (Either Error (Git.URL, [Git.Revision])))  -- ^ For each image, either the Git revisions that have changed or an error.
+  -> m (Map Kube.ImageName (Either Error (Git.URLWithCredentials, [Git.Revision])))  -- ^ For each image, either the Git revisions that have changed or an error.
 compareRevisions gitRepoDir imagePolicies imageDiffs  = do
   -- XXX: Silently ignoring things that don't have start or end labels, as
   -- well as images that are only deployed on one environment.
@@ -209,7 +208,7 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
     lookupImage
       :: Kube.ImageName
       -> (Kube.ImageLabel, Kube.ImageLabel)
-      -> Either Error (Git.URL, LogSpec)
+      -> Either Error (Git.URLWithCredentials, LogSpec)
     lookupImage name (srcLabel, tgtLabel) = do
       imageConfig <- note (NoConfigForImage name) (Map.lookup name imagePolicies)
       endRev <- labelToRevision imageConfig srcLabel
@@ -223,8 +222,8 @@ compareRevisions gitRepoDir imagePolicies imageDiffs  = do
 fetchGitLogs
   :: MonadIO io
   => FilePath  -- ^ Directory that contains all the git repositories
-  -> Map Git.URL [LogSpec] -- ^ Map from Git repositories to fetch to the log commands we want to run against each repo
-  -> io (Map Git.URL (Map LogSpec (Either Error [Git.Revision])))  -- ^ For each repo, for each log command, the result of running that command
+  -> Map Git.URLWithCredentials [LogSpec] -- ^ Map from Git repositories to fetch to the log commands we want to run against each repo
+  -> io (Map Git.URLWithCredentials (Map LogSpec (Either Error [Git.Revision])))  -- ^ For each repo, for each log command, the result of running that command
 fetchGitLogs gitRepoDir = mapWithKeyConcurrently compareManyRevs
   where
     -- | Given a variety of log specs, get the logs, and map them to the image
@@ -232,7 +231,7 @@ fetchGitLogs gitRepoDir = mapWithKeyConcurrently compareManyRevs
     --
     -- The type signature is a little backwards so we can avoid fetching the same log spec many times over.
     compareManyRevs
-      :: Git.URL  -- ^ The URL of the Git repository we want to inspect.
+      :: Git.URLWithCredentials  -- ^ The URL of the Git repository we want to inspect.
       -> [LogSpec]  -- ^ The revision logs we want to run against this repository.
       -> IO (Map LogSpec (Either Error [Git.Revision]))
     compareManyRevs gitURL logSpecs = do
@@ -258,7 +257,7 @@ mapWithKeyConcurrently f d = liftIO $ runConcurrently (Map.traverseWithKey (\k v
 
 -- | Sync repository underneath our root directory, returning the path of the
 -- repository locally.
-syncRepo :: (MonadIO m, MonadError Git.GitError m) => FilePath -> Git.URL -> m FilePath
+syncRepo :: (MonadIO m, MonadError Git.GitError m) => FilePath -> Git.URLWithCredentials -> m FilePath
 syncRepo repoRoot url = do
   Git.syncRepo url repoPath
   pure repoPath
@@ -269,7 +268,7 @@ syncRepo repoRoot url = do
 compareImages
   :: MonadIO io
   => FilePath  -- ^ Where all of the Git repositories are
-  -> Git.URL  -- ^ The URL of the repository with the Kubernetes objects (aka the config repo)
+  -> Git.URLWithCredentials  -- ^ The URL of the repository with the Kubernetes objects (aka the config repo)
   -> Maybe Git.Branch  -- ^ The branch of the repository with the configuration. If Nothing, assume "master".
   -> FilePath  -- ^ The path to the source environment (e.g. "k8s/dev")
   -> FilePath  -- ^ The path to the target environment (e.g. "k8s/prod")
@@ -291,7 +290,7 @@ loadChanges
   :: ClusterDiffer  -- ^ Where the magic happens
   -> FilePath  -- ^ Path to the Kubernetes YAMLs within the configuration repository
   -> Time.Day  -- ^ The start date for Git commits. Commits earlier than 00:00Z on this date will be excluded.
-  -> ExceptT Error IO (Map Kube.ImageName (Either Error (Git.URL, [Git.Revision])))  -- ^ The changes, grouped by image.
+  -> ExceptT Error IO (Map Kube.ImageName (Either Error (Git.URLWithCredentials, [Git.Revision])))  -- ^ The changes, grouped by image.
 loadChanges differ@ClusterDiffer{gitRepoDir} envPath start = withExceptT GitError $ do
   cfg <- getConfig differ
   let Config.ConfigRepo{url, branch} = Config.configRepo cfg
@@ -320,7 +319,7 @@ loadChanges differ@ClusterDiffer{gitRepoDir} envPath start = withExceptT GitErro
 
 -- | Get the Git revision corresponding to a particular label. Error if we
 -- can't figure it out.
-labelToRevision :: MonadError Error m => Config.ImageConfig Config.PolicyConfig -> Kube.ImageLabel -> m Git.RevSpec
+labelToRevision :: MonadError Error m => Config.ImageConfig -> Kube.ImageLabel -> m Git.RevSpec
 labelToRevision imageConfig label =
   case Config.imageToRevisionPolicy imageConfig of
     Config.Identity -> pure . Git.RevSpec $ label

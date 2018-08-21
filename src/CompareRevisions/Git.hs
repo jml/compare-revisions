@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -16,6 +17,12 @@ module CompareRevisions.Git
   , syncRepo
   , getLog
   , firstCommitSince
+  -- * Credential management
+  , Secret(..)
+  , CredentialError(..)
+  , URLWithCredentials(..)
+  , toURL
+  , applyCredentials
   -- * Exported for testing purposes
   , runGit
   , runGitInRepo
@@ -51,6 +58,8 @@ import System.Process
 import System.Process.ByteString (readCreateProcessWithExitCode)
 
 import CompareRevisions.SCP (SCP, formatSCP, parseSCP)
+import qualified CompareRevisions.SCP as SCP
+
 
 -- | The URL to a Git repository.
 data URL
@@ -69,6 +78,102 @@ instance FromJSON URL where
   parseJSON = withText "URI must be text" $ \text ->
     maybe empty pure (URI <$> Network.URI.parseAbsoluteURI (toS text)) <|> (SCP <$> parseSCP text)
 
+
+-- | Credentials required to pull a Git repository.
+--
+-- Normally constructed via 'loadSecret'.
+data Secret
+  = -- | HTTP basic auth, intended to be used over HTTPS.
+    BasicAuth
+    { username :: Username
+    , password :: Password
+    }
+  | -- | SSH key. Normally a GitHub deploy key.
+    SSHKey
+    { -- | The username to connect as via SSH. For GitHub, this is @git@.
+      sshUsername :: SCP.Username
+      -- | Path to a file containing the SSH private key. We never read this file.
+    , sshKeyFile :: FilePath
+    }
+  deriving (Eq, Ord, Show)
+
+-- | A username.
+type Username = ByteString
+
+-- | A password.
+type Password = ByteString
+
+-- | Everything we need to fetch a Git repository, including credentials.
+data URLWithCredentials
+  = -- | A URL, normally https, with a username and password set.
+    CredURI Network.URI.URI
+  | -- | A repository on local disk.
+    LocalFile FilePath
+  | -- | A repository on another computer, accessed via SSH.
+    RemoteFile
+    { -- | The user to SSH as.
+      _credSSHUsername :: SCP.Username
+    , -- | The path to the user's private key
+      credSSHKeyFile :: FilePath
+    , -- | The hostname to connect to
+      _credSSHHostname :: SCP.Hostname
+    , -- | The path of the repository on the host
+      _credSSHFilePath :: FilePath
+    }
+  deriving (Eq, Ord, Show)
+
+toURL :: URLWithCredentials -> URL
+toURL (CredURI uri) = URI uri
+toURL (LocalFile path) = SCP (SCP.File path)
+toURL (RemoteFile user _ host path) = SCP (SCP.AuthRemoteFile user host path)
+
+-- | Get the key file from the URL, if it has one.
+getKeyFile :: URLWithCredentials -> Maybe FilePath
+getKeyFile RemoteFile{credSSHKeyFile} = Just credSSHKeyFile
+getKeyFile _ = Nothing
+
+-- | An error that occurs while applying credentials to a URI.
+data CredentialError
+  = -- | It doesn't make sense to have a username and password in a URI without a host.
+    NoHostInURI Username Network.URI.URI
+  | -- | We don't support using SSH keys for authentication for URIs. Use SCP addresses instead.
+    SSHKeyWithURI FilePath Network.URI.URI
+  | -- | We don't support using SSH without explicit credentials.
+    SSHWithoutCredentials SCP
+  | -- | Using SSH credentials to access a local path doesn't make any sense.
+    LocalPathWithCredentials FilePath Secret
+  | -- | We don't support using a password for SSH access.
+    PasswordForSSH SCP
+  | -- | Not going to guess between different usernames.
+    DifferentUsernames SCP SCP.Username
+  | -- | Not going to guess between different sets of credentials.
+    DifferentCredentials Network.URI.URI Username Password
+  deriving (Eq, Ord, Show)
+
+-- | Apply whatever credentials we might have been given for a URL to that URL,
+-- creating a 'URLWithCredentials' that we can use to access the repository.
+applyCredentials :: MonadError CredentialError e => URL -> Maybe Secret -> e URLWithCredentials
+applyCredentials (URI uri)             Nothing                                         = pure (CredURI uri)
+applyCredentials (URI uri)             (Just SSHKey {sshKeyFile})                      = throwError (SSHKeyWithURI sshKeyFile uri)
+applyCredentials (URI uri)             (Just (BasicAuth username password))            =
+  case Network.URI.uriAuthority uri of
+    Nothing -> throwError (NoHostInURI username uri)  -- Doesn't make sense to have a password but no URI.
+    Just authority ->
+      let userInfo = toS ( username <> ":" <> password <> "@" )
+      in case Network.URI.uriUserInfo authority of
+           "" -> pure (CredURI (uri { Network.URI.uriAuthority = Just authority { Network.URI.uriUserInfo = userInfo } }))
+           existing
+             | existing == userInfo -> pure (CredURI uri)
+             | otherwise -> throwError (DifferentCredentials uri username password)
+applyCredentials (SCP (SCP.File path)) Nothing                                         = pure (LocalFile path) -- We can access local files without keys
+applyCredentials (SCP (SCP.File path)) (Just secret)                                   = throwError (LocalPathWithCredentials path secret)
+applyCredentials (SCP scp)             Nothing                                         = throwError (SSHWithoutCredentials scp) -- Anything remote needs a key
+applyCredentials (SCP scp)             (Just BasicAuth {})                             = throwError (PasswordForSSH scp)
+applyCredentials (SCP (SCP.RemoteFile hostname path)) (Just (SSHKey username keyfile)) =
+  pure (RemoteFile username keyfile hostname path)
+applyCredentials (SCP scp@(SCP.AuthRemoteFile scpName hostname path)) (Just (SSHKey keyUsername keyfile))
+  | scpName == keyUsername = pure (RemoteFile scpName keyfile hostname path)
+  | otherwise              = throwError (DifferentUsernames scp keyUsername)
 
 -- | A Git branch.
 newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON, ToJSON)
@@ -160,7 +265,7 @@ data GitError
 -- If it does, it will be updated.
 syncRepo
   :: (MonadIO m, MonadError GitError m, HasCallStack)
-  => URL -- ^ URL of Git repository to synchronize
+  => URLWithCredentials -- ^ URL of Git repository to synchronize
   -> FilePath -- ^ Where to store the bare Git repository
   -> m ()
 syncRepo url repoPath = do
@@ -172,19 +277,19 @@ syncRepo url repoPath = do
       -- TODO: Wrongly assumes 'origin' is the same, i.e. that URL doesn't
       -- change. We work around this by using 'getRepoPath' to provide the
       -- path, which includes a hash of the URL.
-      fetchRepo repoPath
+      fetchRepo url repoPath
     else do
       Log.debug' "Downloading new repo"
       cloneRepo url repoPath
   Log.debug' "Repo updated"
 
 -- | Clone a Git repository.
-cloneRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => URL -> FilePath -> m ()
-cloneRepo url gitRoot = void $ runGit (["clone", "--mirror"] <> [toText url, toS gitRoot])
+cloneRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => URLWithCredentials -> FilePath -> m ()
+cloneRepo url gitRoot = void $ runGit (getKeyFile url) (["clone", "--mirror"] <> [toText (toURL url), toS gitRoot])
 
 -- | Fetch the latest changes to a Git repository.
-fetchRepo :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> m ()
-fetchRepo repoPath = void $ runGitInRepo repoPath ["fetch", "--all", "--prune"]
+fetchRepo :: (HasCallStack, MonadIO m, MonadError GitError m) => URLWithCredentials -> FilePath -> m ()
+fetchRepo url repoPath = void $ runGitInRepo (getKeyFile url) repoPath ["fetch", "--all", "--prune"]
 
 
 -- | Ensure a checkout of a branch exists at the given path.
@@ -201,7 +306,7 @@ ensureCheckout repoPath branch workTreePath = do
   where
     -- | Get the SHA-1 of the head of a branch.
     hashForBranchHead :: (HasCallStack, MonadError GitError m, MonadIO m) => Branch -> m Hash
-    hashForBranchHead (Branch b) = Hash . Text.strip . toS . fst <$> runGitInRepo repoPath ["rev-list", "-n1", b]
+    hashForBranchHead (Branch b) = Hash . Text.strip . toS . fst <$> runGitInRepo Nothing repoPath ["rev-list", "-n1", b]
 
 
 -- | Ensure a checkout of the given revision exists at the given path.
@@ -237,12 +342,12 @@ ensureCheckout' repoPath (Hash hashText) workTreePath = do
       -- TODO: Doesn't handle case where path exists but is a file (not a
       -- directory), or doesn't contain a valid worktree.
       unlessM (liftIO $ fileExist path) $ do
-        void $ runGitInRepo repoPath ["worktree", "add", toS path, hashText]
+        void $ runGitInRepo Nothing repoPath ["worktree", "add", toS path, hashText]
         Log.debug' $ "Added work tree at " <> toS path
 
     removeWorkTree path = do
       void $ liftIO $ tryJust (guard . isDoesNotExistError) (removeDirectoryRecursive path)
-      void $ runGitInRepo repoPath ["worktree", "prune"]
+      void $ runGitInRepo Nothing repoPath ["worktree", "prune"]
       Log.debug' $ "Removed worktree from " <> toS path
 
     -- | Ensure the symlink at 'linkPath' points to 'newPath'. Return the target
@@ -288,7 +393,7 @@ firstCommitSince repoPath (Branch branch) time = do
   -- (preferred) or add a --before clause and exponentially back off until we
   -- reach a time greater than now.
   let command = ["rev-list", "--first-parent", "--after=" <> formatIsoTime time, branch]
-  (out, _) <- runGitInRepo repoPath command
+  (out, _) <- runGitInRepo Nothing repoPath command
   pure $ Hash . toS <$> lastMay (ByteString.lines out)
 
 -- | Format a UTC time in ISO format.
@@ -301,18 +406,18 @@ getLog repoPath (RevSpec start) (RevSpec end) paths = do
   let withFilter = command <> case paths of
                                 Nothing -> []
                                 Just ps -> ["--"] <> map toS ps
-  (out, _) <- runGitInRepo repoPath withFilter
+  (out, _) <- runGitInRepo Nothing repoPath withFilter
   parseFullerRevisions out
   where
     range = start <> ".." <> end
 
 -- | Run 'git' in a repository.
-runGitInRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> [Text] -> m (ByteString, ByteString)
-runGitInRepo repoPath args = runProcess $ gitCommand (Just repoPath) args
+runGitInRepo :: (HasCallStack, MonadError GitError m, MonadIO m) => Maybe FilePath -> FilePath -> [Text] -> m (ByteString, ByteString)
+runGitInRepo keyFile repoPath args = runProcess $ gitCommand keyFile (Just repoPath) args
 
 -- | Run 'git' on the command line.
-runGit :: (HasCallStack, MonadError GitError m, MonadIO m) => [Text] -> m (ByteString, ByteString)
-runGit args = runProcess $ gitCommand Nothing args
+runGit :: (HasCallStack, MonadError GitError m, MonadIO m) => Maybe FilePath -> [Text] -> m (ByteString, ByteString)
+runGit keyFile args = runProcess $ gitCommand keyFile Nothing args
 
 -- | Run a process.
 runProcess :: (HasCallStack, MonadError GitError m, MonadIO m) => CreateProcess -> m (ByteString, ByteString)
@@ -334,5 +439,12 @@ runProcess process = do
     spec = cmdspec process
 
 -- | Get the CreateProcess for running git.
-gitCommand :: Maybe FilePath -> [Text] -> CreateProcess
-gitCommand repoPath args = (proc "git" (map toS args)) { cwd = repoPath }
+gitCommand :: Maybe FilePath -> Maybe FilePath -> [Text] -> CreateProcess
+gitCommand Nothing repoPath args
+  = (proc "git" (map toS args)) { cwd = repoPath
+                                , env = Just []  -- XXX: Probably not going to work due to git assuming presence of environment variables (e.g. USER, HOME).
+                                }
+gitCommand (Just keyFile) repoPath args
+  = (proc "git" (map toS args)) { cwd = repoPath
+                                , env = Just [ ("GIT_SSH_COMMAND", showCommandForUser "ssh" ["-i", keyFile]) ]
+                                }
