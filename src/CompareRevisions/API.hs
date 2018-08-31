@@ -315,7 +315,7 @@ noDataYet = div_ [class_ "alert alert-info", role_ "alert"] "No data yet"
 -- | The revisions that differ between images.
 --
 -- newtype wrapper exists so we can define HTML & JSON views.
-newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision])))) deriving (Show)
+newtype RevisionDiffs = RevisionDiffs (Maybe (Map Kube.ImageName (Either Engine.Error (Git.URLWithCredentials, [Git.Revision])))) deriving (Show)
 
 -- TODO: JSON version of Revisions.
 
@@ -358,7 +358,7 @@ instance ToHtml RevisionDiffs where
 data ChangeLog
   = ChangeLog
   { startDate :: Time.Day
-  , changelog :: Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision]))
+  , changelog :: Map Kube.ImageName (Either Engine.Error (Git.URLWithCredentials, [Git.Revision]))
   } deriving (Show)
 
 instance ToHtml ChangeLog where
@@ -421,11 +421,11 @@ standardPadding = style_ "margin-top: 2rem"
 -- reviewing it can gauge its user impact.
 renderChangelogRevision
   :: Monad m
-  => Git.URL  -- ^ The URL of the Git repository that this revision is from
+  => Git.URLWithCredentials  -- ^ The URL of the Git repository that this revision is from
   -> Git.Revision  -- ^ The revision to render
   -> HtmlT m ()
 renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, body} = do
-  let gitHubRepo = GitHub.repositoryFromGitURL gitUri
+  let gitHubRepo = GitHub.repositoryFromGitURL (Git.toURL gitUri)
   p_ $
     div_ [class_ "card"] $
       div_ [class_ "card-body"] $ do
@@ -434,7 +434,7 @@ renderChangelogRevision gitUri Git.Revision{commitDate, authorName, subject, bod
           toHtml (authorName <> ", committed on " <> formatShortDate commitDate <> " to ")
           case gitHubRepo of
             Just repo -> renderRepoURL repo
-            Nothing -> toHtml (Git.toText gitUri)
+            Nothing -> toHtml (Git.toText (Git.toURL gitUri))
         case body of
           Nothing -> pass
           Just body' -> pre_ (code_ (toHtml body'))
@@ -473,7 +473,8 @@ formatDateAndTime :: Time.UTCTime -> Text
 formatDateAndTime = toS . Time.formatTime Time.defaultTimeLocale (Time.iso8601DateFormat (Just "%H:%M:%S%z"))
 
 flattenChangelog
-  :: Map Kube.ImageName (Either Engine.Error (Git.URL, [Git.Revision]))
-  -> Map (Git.URL, Git.Revision) [Kube.ImageName]
+  :: Ord gitRepo
+  => Map Kube.ImageName (Either Engine.Error (gitRepo, [Git.Revision]))
+  -> Map (gitRepo, Git.Revision) [Kube.ImageName]
 flattenChangelog changelog =
   Map.fromListWith (<>) [((uri, rev), [img]) | (img, Right (uri, revs)) <- Map.toList changelog, rev <- revs]

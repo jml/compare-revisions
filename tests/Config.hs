@@ -12,7 +12,6 @@ import qualified CompareRevisions.Config as Config
 import qualified CompareRevisions.Duration as Duration
 import qualified CompareRevisions.Git as Git
 import qualified CompareRevisions.Regex as Regex
-import CompareRevisions.SCP (SCP(..))
 
 tests :: IO TestTree
 tests = testSpec "Config" $ do
@@ -20,7 +19,9 @@ tests = testSpec "Config" $ do
     it "Parses the example in the README" $
       case Yaml.decodeEither (toS readmeExample) of
         Left err -> panic (show err)
-        Right parsed -> Config.validateConfig parsed `shouldBe` Right parsedReadmeExample
+        Right parsed -> do
+          loaded <- runExceptT $ Config.interpretConfigFile parsed
+          loaded `shouldBe` Right parsedReadmeExample
 
   describe "Revision policies" $
     it "Parses the example in the README" $ do
@@ -36,6 +37,7 @@ readmeExample :: Text
 readmeExample = Text.unlines
   [ "config-repo:"
   , "  url: git@github.com:my-org/service-config.git"
+  , "  credentials: deploy-key"
   , "  poll-interval: 1m"
   , "  source-env:"
   , "    name: dev"
@@ -47,6 +49,7 @@ readmeExample = Text.unlines
   , "images:"
   , "  weaveworks/cortex:"
   , "    git-url: git@github.com:weaveworks/cortex.git"
+  , "    credentials: deploy-key"
   , "    image-to-revision-policy: weaveworks"
   , ""
   , "revision-policies:"
@@ -54,6 +57,11 @@ readmeExample = Text.unlines
   , "    type: regex"
   , "    match: ^master-([0-9a-f]+)$"
   , "    output: \\1"
+  , ""
+  , "secrets:"
+  , "  deploy-key:"
+  , "    type: ssh-key"
+  , "    ssh-key-file: /path/to/key"
   ]
 
 parsedReadmeExample :: Config.ValidConfig
@@ -61,7 +69,7 @@ parsedReadmeExample =
   Config.ValidConfig repo images
   where
     repo = Config.ConfigRepo
-           { url = Git.SCP (AuthRemoteFile "git" "github.com" "my-org/service-config.git")
+           { url = Git.RemoteFile "git" "/path/to/key" "github.com" "my-org/service-config.git"
            , branch = Nothing
            , pollInterval = 1 * Duration.minute
            , sourceEnv = Config.Environment
@@ -74,7 +82,7 @@ parsedReadmeExample =
                          }
            }
     images = [ ("weaveworks/cortex", Config.ImageConfig
-                                     { gitURL = Git.SCP (AuthRemoteFile "git" "github.com" "weaveworks/cortex.git")
+                                     { gitURL = Git.RemoteFile "git" "/path/to/key" "github.com" "weaveworks/cortex.git"
                                      , imageToRevisionPolicy = Config.Regex (fromJust (Regex.makeRegexReplace "^master-([0-9a-f]+)$" "\\1"))
                                      , paths = Nothing
                                      })
