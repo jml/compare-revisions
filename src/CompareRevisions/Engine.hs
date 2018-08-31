@@ -160,8 +160,8 @@ data LogSpec = LogSpec Git.RevSpec Git.RevSpec (Maybe [FilePath]) deriving (Eq, 
 calculateClusterDiff :: MonadIO io => ClusterDiffer -> ExceptT Error io ClusterDiff
 calculateClusterDiff differ@ClusterDiffer{gitRepoDir} = do
   cfg <- getConfig differ
-  let Config.ConfigRepo{url, branch, sourceEnv, targetEnv} = Config.configRepo cfg
-  imageDiffs <- compareImages gitRepoDir url branch (Config.path sourceEnv) (Config.path targetEnv)
+  let Config.ConfigRepo{sourceEnv, targetEnv} = Config.configRepo cfg
+  imageDiffs <- compareImages differ (Config.path sourceEnv) (Config.path targetEnv)
   revisionDiffs <- compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
   pure (ClusterDiff revisionDiffs imageDiffs)
 
@@ -267,19 +267,15 @@ syncRepo repoRoot url = do
 -- | Find the images that differ between two Kubernetes environments.
 compareImages
   :: MonadIO io
-  => FilePath  -- ^ Where all of the Git repositories are
-  -> Git.URLWithCredentials  -- ^ The URL of the repository with the Kubernetes objects (aka the config repo)
-  -> Maybe Git.Branch  -- ^ The branch of the repository with the configuration. If Nothing, assume "master".
+  => ClusterDiffer
   -> FilePath  -- ^ The path to the source environment (e.g. "k8s/dev")
   -> FilePath  -- ^ The path to the target environment (e.g. "k8s/prod")
   -> ExceptT Error io (Map Kube.KubeID [Kube.ImageDiff])  -- ^ A map of Kubernetes objects to lists of differences between images.
-compareImages gitRepoDir url branch sourceEnv targetEnv = withExceptT GitError $ do
-  repoPath <- syncRepo gitRepoDir url
-  Git.ensureCheckout repoPath (fromMaybe (Git.Branch "master") branch) checkoutPath
-  Kube.getDifferingImages <$> loadEnv sourceEnv <*> loadEnv targetEnv
-  where
-    checkoutPath = gitRepoDir </> "config-repo"
-    loadEnv envPath = Kube.loadEnvFromDisk (checkoutPath </> envPath)
+compareImages differ sourceEnv targetEnv = withExceptT GitError $ do
+  (_, _, checkoutPath) <- checkoutConfig differ
+  Kube.getDifferingImages
+    <$> Kube.loadEnvFromDisk (checkoutPath </> sourceEnv)
+    <*> Kube.loadEnvFromDisk (checkoutPath </> targetEnv)
 
 
 -- | Find all the Git commits that have contributed to the change in a cluster
@@ -292,11 +288,7 @@ loadChanges
   -> Time.Day  -- ^ The start date for Git commits. Commits earlier than 00:00Z on this date will be excluded.
   -> ExceptT Error IO (Map Kube.ImageName (Either Error (Git.URLWithCredentials, [Git.Revision])))  -- ^ The changes, grouped by image.
 loadChanges differ@ClusterDiffer{gitRepoDir} envPath start = withExceptT GitError $ do
-  cfg <- getConfig differ
-  let Config.ConfigRepo{url, branch} = Config.configRepo cfg
-  repoPath <- syncRepo gitRepoDir url
-  let branch' = fromMaybe (Git.Branch "master") branch
-  Git.ensureCheckout repoPath branch' checkoutPath
+  (repoPath, branch', checkoutPath) <- checkoutConfig differ
   startHash' <- Git.firstCommitSince repoPath branch' (Time.UTCTime start (Time.secondsToDiffTime 0))
   case startHash' of
     Nothing -> pure Map.empty -- XXX: Maybe throw an error instead?
@@ -309,12 +301,20 @@ loadChanges differ@ClusterDiffer{gitRepoDir} envPath start = withExceptT GitErro
       imageDiffs <- Kube.getDifferingImages
                     <$> Kube.loadEnvFromDisk (checkoutPath </> envPath)
                     <*> Kube.loadEnvFromDisk (startCheckoutPath </> envPath)
+      cfg <- getConfig differ
       compareRevisions gitRepoDir (Config.images cfg) (fold imageDiffs)
-  where
-    -- XXX: Not sure how I feel about re-using the checkout that we're using
-    -- for compare-images etc.
-    checkoutPath = gitRepoDir </> "config-repo"
 
+
+checkoutConfig :: MonadIO m => ClusterDiffer -> ExceptT Git.GitError m (FilePath, Git.Branch, FilePath)
+checkoutConfig differ@ClusterDiffer{gitRepoDir} = do
+  cfg <- getConfig differ
+  let Config.ConfigRepo{url, branch} = Config.configRepo cfg
+  repoPath <- syncRepo gitRepoDir url
+  let branch' = fromMaybe (Git.Branch "master") branch
+  Git.ensureCheckout repoPath branch' checkoutPath
+  pure (repoPath, branch', checkoutPath)
+  where
+    checkoutPath = gitRepoDir </> "configRepo"
 
 
 -- | Get the Git revision corresponding to a particular label. Error if we
