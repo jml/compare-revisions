@@ -25,6 +25,7 @@ import Control.Concurrent.STM (TVar, newTVarIO, readTVarIO, writeTVar)
 import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import Data.String (String)
 import qualified Data.Time as Time
 import qualified Prometheus as Prom
@@ -316,6 +317,36 @@ checkoutConfig differ@ClusterDiffer{gitRepoDir} = do
   where
     checkoutPath = gitRepoDir </> "configRepo"
 
+
+deployLeadTimes :: MonadIO io => ClusterDiffer -> FilePath -> Time.UTCTime -> Time.UTCTime -> ExceptT Git.GitError io a
+deployLeadTimes differ envPath startDate endDate = do
+  (repoPath, branch, _) <- checkoutConfig differ
+  revisions <- Git.commitsInWindow repoPath branch startDate endDate Nothing
+  imagesByRevision <- sequenceA (Map.fromSet (imagesForRevision repoPath) (Set.fromList revisions))
+  let imagesByDate = sort [(Git.commitDate rev, imgs) | (rev, imgs) <- Map.toList imagesByRevision]
+  case imagesByDate of
+    [] -> pure mempty
+    (date, imgs):[] -> do
+      flip Map.traverseWithKey imgs $ \name labels -> do
+        revSpecs <- traverse (lookupImage name) (catMaybes labels)
+        revs <- Git.getRevisions imageRepoPath revSpecs
+        case reverse (sortOn Git.commitDate revs) of
+          [] -> pure mempty
+          newest:_ -> 
+    x:xs -> notImplemented
+  where
+    imagesForRevision repoPath Git.Revision{revisionHash} = Kube.getAllImages <$> loadEnvFromGit (gitRepoDir differ) repoPath revisionHash envPath
+
+    lookupImage name label = do
+      Config.ValidConfig{images} <- getConfig differ
+      imageConfig <- note (NoConfigForImage name) (Map.lookup name images)
+      labelToRevision imageConfig label
+
+loadEnvFromGit :: MonadIO io => FilePath -> FilePath -> Git.Hash -> FilePath -> ExceptT Git.GitError io Kube.Env
+loadEnvFromGit gitRepoDir repoPath revisionHash envPath = do
+  let checkoutPath = gitRepoDir </> ("checkout-" <> toS (Git.unHash revisionHash))
+  Git.ensureCheckout' repoPath revisionHash checkoutPath
+  Kube.loadEnvFromDisk (checkoutPath </> envPath)
 
 -- | Get the Git revision corresponding to a particular label. Error if we
 -- can't figure it out.

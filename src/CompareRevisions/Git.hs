@@ -16,7 +16,9 @@ module CompareRevisions.Git
   , ensureCheckout'
   , syncRepo
   , getLog
+  , commitsInWindow
   , firstCommitSince
+  , getRevisions
   -- * Credential management
   , Secret(..)
   , CredentialError(..)
@@ -395,6 +397,35 @@ firstCommitSince repoPath (Branch branch) time = do
   let command = ["rev-list", "--first-parent", "--after=" <> formatIsoTime time, branch]
   (out, _) <- runGitInRepo Nothing repoPath command
   pure $ Hash . toS <$> lastMay (ByteString.lines out)
+
+-- | Find all the mainline commits that occurred between the two dates.
+commitsInWindow
+  :: (HasCallStack, MonadError GitError m, MonadIO m)
+  => FilePath  -- ^ The repository's location on disk
+  -> Branch  -- ^ The branch to query
+  -> Time.UTCTime  -- ^ The start date
+  -> Time.UTCTime  -- ^ The end date
+  -> Maybe [FilePath]  -- ^ The paths within the repository we care about
+  -> m [Revision]
+commitsInWindow repoPath (Branch branch) startTime endTime paths = do
+  let command = [ "log"
+                , "--first-parent"
+                , "--format=fuller"
+                , "--date=iso"
+                , "--after=" <> formatIsoTime startTime
+                , "--before=" <> formatIsoTime endTime
+                , branch
+                ]
+  let withFilter = command <> maybe [] (\ps -> ["--"] <> map toS ps) paths
+  (out, _) <- runGitInRepo Nothing repoPath withFilter
+  parseFullerRevisions out
+
+-- | Load a bunch of revisions from a Git repository.
+getRevisions :: (MonadError GitError m, MonadIO m) => FilePath -> [RevSpec] -> m [Revision]
+getRevisions repoPath revSpecs = do
+  let command = ["show", "-s", "--format=fuller", "--date=iso"] <> [spec | RevSpec spec <- revSpecs]
+  (out, _) <- runGitInRepo Nothing repoPath command
+  parseFullerRevisions out
 
 -- | Format a UTC time in ISO format.
 formatIsoTime :: Time.UTCTime -> Text

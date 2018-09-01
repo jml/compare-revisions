@@ -9,6 +9,7 @@ module CompareRevisions.Kube
     -- * Environments
   , Env
   , loadEnvFromDisk
+  , getAllImages
   , ProcessError(..)
     -- * Images
   , Image(..)
@@ -28,6 +29,8 @@ import qualified Data.Aeson as Aeson
 import Data.Aeson (Value(..), (.:), (.:?))
 import qualified Data.ByteString as ByteString
 import qualified Data.HashMap.Lazy as HashMap
+import Data.HashSet (HashSet)
+import qualified Data.HashSet as Set
 import qualified Data.Map as Map
 import qualified Data.Yaml as Yaml
 import Data.Text (splitOn)
@@ -89,7 +92,6 @@ findAll key value =
     _ -> []
 
 
-
 data ProcessError = ProcessError ExitCode ByteString deriving (Eq, Show)
 
 -- | Load the definition of a Kubernetes object from a cluster.
@@ -149,6 +151,10 @@ type ImageSet = Map ImageName (Maybe ImageLabel)
 -- image name to image label, where the label is optional.
 getImageSet :: KubeObject -> ImageSet
 getImageSet kubeObj = Map.fromList [ (name, label) | Image name label <- images kubeObj ]
+
+-- | Get all the images in an environment.
+getAllImages :: Env -> Map ImageName (HashSet (Maybe ImageLabel))
+getAllImages env = Map.fromListWith (<>) (foldMap (\obj -> [ (name, Set.singleton label) | Image name label <- images obj ]) env)
 
 -- | Possible difference between image sets.
 data ImageDiff
