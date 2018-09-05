@@ -14,6 +14,8 @@ module CompareRevisions.Engine
   , runClusterDiffer
   , getConfig
   , loadChanges
+  , Deployment(..)
+  , deployLeadTimes
   , ClusterDiff(..)
   , getCurrentDifferences
   ) where
@@ -24,6 +26,8 @@ import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (TVar, newTVarIO, readTVarIO, writeTVar)
 import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
+import Data.HashSet (HashSet)
+import qualified Data.HashSet as HashSet
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.String (String)
@@ -317,30 +321,83 @@ checkoutConfig differ@ClusterDiffer{gitRepoDir} = do
   where
     checkoutPath = gitRepoDir </> "configRepo"
 
+-- | A record of deploying a revision of code to Kubernetes.
+data Deployment
+  = Deployment
+  { -- | The Git revision that was deployed.
+    sourceRevision :: Git.Revision
+  , -- | The Git revision which deployed it.
+    deployRevision :: Git.Revision
+  }
+  deriving (Eq, Ord, Show)
 
-deployLeadTimes :: MonadIO io => ClusterDiffer -> FilePath -> Time.UTCTime -> Time.UTCTime -> ExceptT Git.GitError io a
+-- | Where we store the repository locally.
+getRepoPath :: ClusterDiffer -> Git.URLWithCredentials -> FilePath
+getRepoPath ClusterDiffer{gitRepoDir} = Config.getRepoPath gitRepoDir
+
+
+deployLeadTimes :: MonadIO io => ClusterDiffer -> FilePath -> Time.UTCTime -> Time.UTCTime -> ExceptT Error io (Map Git.URLWithCredentials [Deployment])
 deployLeadTimes differ envPath startDate endDate = do
-  (repoPath, branch, _) <- checkoutConfig differ
-  revisions <- Git.commitsInWindow repoPath branch startDate endDate Nothing
-  imagesByRevision <- sequenceA (Map.fromSet (imagesForRevision repoPath) (Set.fromList revisions))
-  let imagesByDate = sort [(Git.commitDate rev, imgs) | (rev, imgs) <- Map.toList imagesByRevision]
-  case imagesByDate of
-    [] -> pure mempty
-    (date, imgs):[] -> do
-      flip Map.traverseWithKey imgs $ \name labels -> do
-        revSpecs <- traverse (lookupImage name) (catMaybes labels)
-        revs <- Git.getRevisions imageRepoPath revSpecs
-        case reverse (sortOn Git.commitDate revs) of
-          [] -> pure mempty
-          newest:_ -> 
-    x:xs -> notImplemented
+  -- Each of the deployed revisions within the window mapped to the images within that deployment.
+  config <- getConfig differ
+  imagesByRevision <- withExceptT GitError $ do
+    (repoPath, branch, _)  <- checkoutConfig differ
+    revisions <- Git.commitsInWindow repoPath branch startDate endDate Nothing
+    sequenceA (Map.fromSet (imagesForRevision repoPath) (Set.fromList revisions))
+  let codeRevisionsByDeployRevision = map (revisionsForImages config) imagesByRevision
+  let deployRevisionsByRepo = swapKeys codeRevisionsByDeployRevision
+  let revisionsByDate = map (sortOn (Git.commitDate . fst) . Map.toList) deployRevisionsByRepo
+  Map.traverseWithKey (\url revs -> foldM (thing url) [] revs) revisionsByDate
   where
     imagesForRevision repoPath Git.Revision{revisionHash} = Kube.getAllImages <$> loadEnvFromGit (gitRepoDir differ) repoPath revisionHash envPath
 
-    lookupImage name label = do
-      Config.ValidConfig{images} <- getConfig differ
-      imageConfig <- note (NoConfigForImage name) (Map.lookup name images)
-      labelToRevision imageConfig label
+    snapshotDeployment :: MonadIO io => Git.URLWithCredentials -> Git.Revision -> HashSet Git.RevSpec -> ExceptT Error io [Deployment]
+    snapshotDeployment url deployRevision revSpecs = do
+      latest <- latestRevision url revSpecs
+      pure $ case latest of
+        Nothing -> []
+        Just rev -> [Deployment rev deployRevision]
+
+    latestRevision :: (Foldable t, MonadIO io) => Git.URLWithCredentials -> t Git.RevSpec -> ExceptT Error io (Maybe Git.Revision)
+    latestRevision url revSpecs = do
+      let imageRepoPath = getRepoPath differ url
+      revs <- withExceptT GitError $ Git.getRevisions imageRepoPath (toList revSpecs)
+      pure $ headMay (sortOn (Down . Git.commitDate) revs)
+
+    revisionsForImages
+      :: Config.ValidConfig
+      -> Map Kube.ImageName (HashSet (Maybe Kube.ImageLabel))
+      -> Map Git.URLWithCredentials (HashSet Git.RevSpec)
+    revisionsForImages Config.ValidConfig{images = imagePolicy} images =
+      let byPolicy = Map.mapKeysWith (<>) (`Map.lookup` imagePolicy) images
+          withoutMissing = Map.fromList [ (policy, labels) | (Just policy, labels) <- Map.toList byPolicy ]
+          stripMissingLabels = map (catMaybes . toList) withoutMissing
+          withRevisions = Map.mapWithKey (\policy labels -> snd (partitionEithers (map (labelToRevision policy) labels))) stripMissingLabels
+          asSets = map HashSet.fromList withRevisions
+          byURL = Map.mapKeysWith (<>) Config.gitURL asSets
+      in byURL
+
+    swapKeys :: (Ord k1, Ord k2, Monoid a) => Map k1 (Map k2 a) -> Map k2 (Map k1 a)
+    swapKeys xs = Map.unionsWith (Map.unionWith (<>)) (map (\(outer, innerMap) -> (map (Map.singleton outer) innerMap)) (Map.toList xs))
+
+    thing
+      :: MonadIO io
+      => Git.URLWithCredentials
+      -> [Deployment]
+      -> (Git.Revision, HashSet Git.RevSpec)
+      -> ExceptT Error io [Deployment]
+    thing url history (deployRevision, imageRevisions) =
+      case history of
+        [] -> snapshotDeployment url deployRevision imageRevisions
+        Deployment{sourceRevision}:_ -> do
+          let imageRepoPath = getRepoPath differ url
+          latest <- latestRevision url imageRevisions
+          case latest of
+            Nothing -> pure history
+            Just latest' -> do
+              deployedRevisions <- withExceptT GitError $ Git.getLog imageRepoPath (Git.getRevSpec sourceRevision) (Git.getRevSpec latest') Nothing
+              pure $ [Deployment deployRevision deployed | deployed <- reverse deployedRevisions] <> history
+
 
 loadEnvFromGit :: MonadIO io => FilePath -> FilePath -> Git.Hash -> FilePath -> ExceptT Git.GitError io Kube.Env
 loadEnvFromGit gitRepoDir repoPath revisionHash envPath = do
