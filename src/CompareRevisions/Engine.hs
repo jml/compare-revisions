@@ -320,7 +320,7 @@ checkoutConfig differ@ClusterDiffer{gitRepoDir} = do
   Git.ensureCheckout repoPath branch' checkoutPath
   pure (repoPath, branch', checkoutPath)
   where
-    checkoutPath = gitRepoDir </> "configRepo"
+    checkoutPath = gitRepoDir </> "config-repo"
 
 -- | A record of deploying a revision of code to Kubernetes.
 data Deployment
