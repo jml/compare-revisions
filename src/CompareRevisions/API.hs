@@ -75,12 +75,14 @@ type API
   = ImagesAPI
   :<|> RevisionsAPI
   :<|> ChangelogAPI
+  :<|> TimelineAPI
   :<|> StaticAPI
   :<|> RootAPI
 
 type ImagesAPI = "images" :> Get '[HTML, JSON] (Page ImageDiffs)
 type RevisionsAPI = "revisions" :> Get '[HTML] (Page RevisionDiffs)
 type ChangelogAPI = Capture "environment" Config.EnvironmentName :> "changes" :> QueryParam "start" Time.Day :> Get '[HTML] (Page ChangeLog)
+type TimelineAPI = Capture "environment" Config.EnvironmentName :> "timeline" :> QueryParam "start" Time.Day :> QueryParam "end" Time.Day :> Get '[JSON] Timeline
 type StaticAPI = "static" :> Raw
 type RootAPI = Get '[HTML] (Page RootPage)
 
@@ -101,6 +103,7 @@ server config clusterDiffer
     ( images clusterDiffer
       :<|> revisions clusterDiffer
       :<|> changes clusterDiffer
+      :<|> timeline clusterDiffer
       -- servant 0.14 makes this 'tagged' dance unnecessary.
       :<|> Tagged (unTagged (serveStaticDir (staticDir config)))
       :<|> rootPage clusterDiffer )
@@ -149,10 +152,7 @@ revisions differ = do
 --     probably not even grouped by images.
 changes :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> ReaderT Config Handler (Page ChangeLog)
 changes differ env start' = do
-  envs <- findEnvironments <$> Engine.getConfig differ
-  envPath <- case Map.lookup env envs of
-    Nothing -> throwError $ err404 { errBody = "No such environment: " <> toS env }
-    Just envPath -> pure envPath
+  envPath <- getEnvPath differ env
   start <- case start' of
     Nothing -> do
       now <- liftIO Time.getCurrentTime
@@ -165,6 +165,34 @@ changes differ env start' = do
     Left err -> throwError $ err500 { errBody = "Could not load config repo: " <> show err }
     Right changelog -> makePage (env <> " :: changelog") (safeLink api (Proxy @ChangelogAPI) env start') (ChangeLog start changelog)
 
+
+-- | Get the path on disk where an enviroment's YAML files are.
+getEnvPath
+  :: (MonadError ServantErr m, MonadIO m)
+  => Engine.ClusterDiffer
+  -> Config.EnvironmentName
+  -> m FilePath
+getEnvPath differ env = do
+  envs <- findEnvironments <$> Engine.getConfig differ
+  case Map.lookup env envs of
+    Nothing -> throwError $ err404 { errBody = "No such environment: " <> toS env }
+    Just envPath -> pure envPath
+
+type Timeline = Map Git.URLWithCredentials [Engine.Deployment]
+
+timeline :: Engine.ClusterDiffer -> Config.EnvironmentName -> Maybe Time.Day -> Maybe Time.Day -> ReaderT Config Handler Timeline
+timeline differ env start' end' = do
+  envPath <- getEnvPath differ env
+  today <- Time.utctDay <$> liftIO Time.getCurrentTime
+  let startDate = fromMaybe (Time.addDays (-7) today) start'
+  let endDate = fromMaybe today end'
+  let zeroSeconds = Time.secondsToDiffTime 0
+  let startTime = Time.UTCTime startDate zeroSeconds
+  let endTime = Time.UTCTime endDate zeroSeconds
+  deploys <- liftIO . runExceptT $ Engine.deployLeadTimes differ envPath startTime endTime
+  case deploys of
+    Left err -> throwError $ err500 { errBody = "Could not load timeline: " <> show err }
+    Right deploys' -> pure deploys'
 
 -- | Find all of the environments in our configuration.
 findEnvironments :: Config.ValidConfig -> Map Config.EnvironmentName FilePath

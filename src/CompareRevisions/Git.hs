@@ -11,6 +11,7 @@ module CompareRevisions.Git
   , RevSpec(..)
   , Revision(..)
   , abbrevHash
+  , getRevSpec
   , GitError(..)
   , ensureCheckout
   , ensureCheckout'
@@ -40,7 +41,7 @@ import qualified Data.ByteString.Char8 as ByteString
 import qualified Data.Char as Char
 import qualified Data.Text as Text
 import qualified Data.Time as Time
-import Data.Aeson (FromJSON(..), ToJSON(..), withText)
+import Data.Aeson (FromJSON(..), ToJSON(..), ToJSONKey(..), withText, object, (.=))
 import qualified Network.URI
 import System.Directory (removeDirectoryRecursive)
 import System.FilePath ((</>), makeRelative, takeDirectory)
@@ -124,6 +125,11 @@ data URLWithCredentials
     }
   deriving (Eq, Ord, Show)
 
+instance ToJSON URLWithCredentials where
+  toJSON = toJSON . toText . toURL
+
+instance ToJSONKey URLWithCredentials
+
 toURL :: URLWithCredentials -> URL
 toURL (CredURI uri) = URI uri
 toURL (LocalFile path) = SCP (SCP.File path)
@@ -181,14 +187,14 @@ applyCredentials (SCP scp@(SCP.AuthRemoteFile scpName hostname path)) (Just (SSH
 newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON, ToJSON)
 
 -- | A SHA-1 hash for a Git revision.
-newtype Hash = Hash { unHash :: Text } deriving (Eq, Ord, Show, Generic, FromJSON)
+newtype Hash = Hash { unHash :: Text } deriving (Eq, Ord, Show, Generic, FromJSON, ToJSON)
 
 -- | Parse a full SHA1 hash.
 fullHashParser :: Atto.Parser Hash
 fullHashParser = Hash . toS <$> Atto.takeWhile1 Char.isHexDigit
 
 -- | Specifies a revision in a Git repository.
-newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show, Generic, FromJSON)
+newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show, Generic, Hashable, FromJSON)
 
 -- | A Git revision.
 data Revision
@@ -200,12 +206,25 @@ data Revision
   , body :: Maybe Text
   } deriving (Eq, Ord, Show)
 
+instance ToJSON Revision where
+  toJSON Revision{revisionHash, commitDate, authorName, subject, body} =
+    object [ "revision" .= revisionHash
+           , "commit-date" .= commitDate
+           , "author" .= authorName
+           , "subject" .= subject
+           , "body" .= body
+           ]
+
 -- | Get the abbreviated hash for a revision.
 --
 -- Does /not/ use the same algorithm as Git. Instead naively gets the first 8
 -- characters of the full hash.
 abbrevHash :: Revision -> Text
 abbrevHash = Text.take 8 . unHash . revisionHash
+
+-- | Get a 'RevSpec' for this 'Revision'
+getRevSpec :: Revision -> RevSpec
+getRevSpec Revision{revisionHash = Hash hashText} = RevSpec hashText
 
 -- | Parser for a "fuller" Git revision.
 --

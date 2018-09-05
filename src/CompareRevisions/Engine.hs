@@ -26,6 +26,7 @@ import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (TVar, newTVarIO, readTVarIO, writeTVar)
 import qualified Control.Logging as Log
 import Control.Monad.Except (withExceptT)
+import Data.Aeson (ToJSON(..), object, (.=))
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HashSet
 import qualified Data.Map as Map
@@ -330,6 +331,12 @@ data Deployment
     deployRevision :: Git.Revision
   }
   deriving (Eq, Ord, Show)
+
+instance ToJSON Deployment where
+  toJSON Deployment{sourceRevision, deployRevision} =
+    object [ "source" .= sourceRevision
+           , "deploy" .= deployRevision
+           ]
 
 -- | Where we store the repository locally.
 getRepoPath :: ClusterDiffer -> Git.URLWithCredentials -> FilePath
