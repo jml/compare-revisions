@@ -345,22 +345,24 @@ instance ToJSON Deployment where
            , "deploy" .= deployRevision
            ]
 
--- | Where we store the repository locally.
-getRepoPath :: ClusterDiffer -> Git.URLWithCredentials -> FilePath
-getRepoPath ClusterDiffer{gitRepoDir} = Config.getRepoPath gitRepoDir
-
-
 deployLeadTimes :: MonadIO io => ClusterDiffer -> FilePath -> Time.UTCTime -> Time.UTCTime -> ExceptT Error io (Map Git.URLWithCredentials [Deployment])
 deployLeadTimes differ envPath startDate endDate = do
-  -- Each of the deployed revisions within the window mapped to the images within that deployment.
   config <- getConfig differ
+  -- Each of the deployed revisions within the window mapped to the images within that deployment.
   imagesByRevision <- withExceptT GitError $ do
     (repoPath, branch, _)  <- checkoutConfig differ
     revisions <- Git.commitsInWindow repoPath branch startDate endDate Nothing
     sequenceA (Map.fromSet (imagesForRevision repoPath) (Set.fromList (map DeployRevision revisions)))
+  -- Translate each set of deployed images into revisions on git repos
   let codeRevisionsByDeployRevision = map (revisionsForImages config) imagesByRevision
+  -- Group by repository rather than by deployment.
   let deployRevisionsByRepo = swapKeys codeRevisionsByDeployRevision
+  -- Ensure we have the latest version of each deployment
+  let repoDir = gitRepoDir differ
+  traverse_ (withExceptT GitError . syncRepo repoDir) (Map.keys deployRevisionsByRepo)
+  -- For each repository, order the deployments by date
   let revisionsByDate = map (sortOn (Git.commitDate . unDeployRevision . fst) . Map.toList) deployRevisionsByRepo
+  -- Build a timeline of Deployments
   Map.traverseWithKey (\url revs -> foldM (thing url) [] revs) revisionsByDate
   where
     imagesForRevision repoPath (DeployRevision Git.Revision{revisionHash}) = Kube.getAllImages <$> loadEnvFromGit (gitRepoDir differ) repoPath revisionHash envPath
@@ -374,9 +376,9 @@ deployLeadTimes differ envPath startDate endDate = do
 
     latestRevision :: (Foldable t, MonadIO io) => Git.URLWithCredentials -> t Git.RevSpec -> ExceptT Error io (Maybe Git.Revision)
     latestRevision url revSpecs = do
-      let imageRepoPath = getRepoPath differ url
-      revs <- withExceptT GitError $ Git.getRevisions imageRepoPath (toList revSpecs)
-      pure $ headMay (sortOn (Down . Git.commitDate) revs)
+      let imageRepoPath = getRepoPath url
+      (_, revs) <- liftIO $ Git.getRevisions imageRepoPath (toList revSpecs)
+      pure $ headMay (sortOn (Down . Git.commitDate) (Map.elems revs))
 
     revisionsForImages
       :: Config.ValidConfig
@@ -394,6 +396,10 @@ deployLeadTimes differ envPath startDate endDate = do
     swapKeys :: (Ord k1, Ord k2, Monoid a) => Map k1 (Map k2 a) -> Map k2 (Map k1 a)
     swapKeys xs = Map.unionsWith (Map.unionWith (<>)) (map (\(outer, innerMap) -> (map (Map.singleton outer) innerMap)) (Map.toList xs))
 
+    -- | Where we store the repository locally.
+    getRepoPath :: Git.URLWithCredentials -> FilePath
+    getRepoPath = Config.getRepoPath (gitRepoDir differ)
+
     thing
       :: MonadIO io
       => Git.URLWithCredentials
@@ -404,7 +410,7 @@ deployLeadTimes differ envPath startDate endDate = do
       case history of
         [] -> snapshotDeployment url deployRevision imageRevisions
         Deployment{sourceRevision}:_ -> do
-          let imageRepoPath = getRepoPath differ url
+          let imageRepoPath = getRepoPath url
           latest <- latestRevision url imageRevisions
           case latest of
             Nothing -> pure history

@@ -40,6 +40,8 @@ import qualified Data.Attoparsec.Text as Atto
 import qualified Data.Attoparsec.Time as Atto
 import qualified Data.ByteString.Char8 as ByteString
 import qualified Data.Char as Char
+import qualified Data.Map as Map
+import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Time as Time
 import Data.Aeson (FromJSON(..), ToJSON(..), ToJSONKey(..), ToJSONKeyFunction(..), withText, object, (.=))
@@ -297,6 +299,7 @@ data GitError
   -- | An error occurred running the 'git' subprocess.
   = GitProcessError Text Int ByteString ByteString (Maybe FilePath)
   | InvalidRevision ByteString
+  | WrongRevisions [Revision]
   deriving (Eq, Show)
 
 -- | Sync a repository.
@@ -459,11 +462,30 @@ commitsInWindow repoPath (Branch branch) startTime endTime paths = do
   parseFullerRevisions out
 
 -- | Load a bunch of revisions from a Git repository.
-getRevisions :: (MonadError GitError m, MonadIO m) => FilePath -> [RevSpec] -> m [Revision]
+getRevisions :: (Traversable t, MonadIO io) => FilePath -> t RevSpec -> io (Map RevSpec GitError, Map RevSpec Revision)
 getRevisions repoPath revSpecs = do
-  let command = ["show", "-s", "--format=fuller", "--date=iso"] <> [spec | RevSpec spec <- revSpecs]
+  revisions <- sequenceA (Map.fromSet (runExceptT . getRevision repoPath) (Set.fromList (toList revSpecs)))
+  pure (partitionEithersMap revisions)
+
+
+partitionEithersMap :: Ord a => Map a (Either b c) -> (Map a b, Map a c)
+partitionEithersMap input =
+  let (ls, rs) = foldr splitByEither ([], []) (Map.toList input)
+  in (Map.fromList ls, Map.fromList rs)
+  where
+    splitByEither item (l, r) =
+      case item of
+        (a, Left b)  -> ((a, b):l, r)
+        (a, Right b) -> (l, (a, b):r)
+
+getRevision :: (MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> m Revision
+getRevision repoPath (RevSpec spec) = do
+  let command = ["show", "-s", "--format=fuller", "--date=iso", spec]
   (out, _) <- runGitInRepo Nothing repoPath command
-  parseFullerRevisions out
+  revs <- parseFullerRevisions out
+  case revs of
+    [rev] -> pure rev
+    _ -> throwError (WrongRevisions revs)
 
 -- | Format a UTC time in ISO format.
 formatIsoTime :: Time.UTCTime -> Text
