@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TupleSections #-}
 -- | The heart of compare-revisions
@@ -322,13 +323,19 @@ checkoutConfig differ@ClusterDiffer{gitRepoDir} = do
   where
     checkoutPath = gitRepoDir </> "config-repo"
 
+
+-- | A revision in our config repo that represents a deployment.
+--
+-- Defining this so we don't accidentally confuse them with source code revisions.
+newtype DeployRevision = DeployRevision { unDeployRevision :: Git.Revision } deriving (Eq, Ord, Show, ToJSON)
+
 -- | A record of deploying a revision of code to Kubernetes.
 data Deployment
   = Deployment
   { -- | The Git revision that was deployed.
     sourceRevision :: Git.Revision
   , -- | The Git revision which deployed it.
-    deployRevision :: Git.Revision
+    deployRevision :: DeployRevision
   }
   deriving (Eq, Ord, Show)
 
@@ -350,15 +357,15 @@ deployLeadTimes differ envPath startDate endDate = do
   imagesByRevision <- withExceptT GitError $ do
     (repoPath, branch, _)  <- checkoutConfig differ
     revisions <- Git.commitsInWindow repoPath branch startDate endDate Nothing
-    sequenceA (Map.fromSet (imagesForRevision repoPath) (Set.fromList revisions))
+    sequenceA (Map.fromSet (imagesForRevision repoPath) (Set.fromList (map DeployRevision revisions)))
   let codeRevisionsByDeployRevision = map (revisionsForImages config) imagesByRevision
   let deployRevisionsByRepo = swapKeys codeRevisionsByDeployRevision
-  let revisionsByDate = map (sortOn (Git.commitDate . fst) . Map.toList) deployRevisionsByRepo
+  let revisionsByDate = map (sortOn (Git.commitDate . unDeployRevision . fst) . Map.toList) deployRevisionsByRepo
   Map.traverseWithKey (\url revs -> foldM (thing url) [] revs) revisionsByDate
   where
-    imagesForRevision repoPath Git.Revision{revisionHash} = Kube.getAllImages <$> loadEnvFromGit (gitRepoDir differ) repoPath revisionHash envPath
+    imagesForRevision repoPath (DeployRevision Git.Revision{revisionHash}) = Kube.getAllImages <$> loadEnvFromGit (gitRepoDir differ) repoPath revisionHash envPath
 
-    snapshotDeployment :: MonadIO io => Git.URLWithCredentials -> Git.Revision -> HashSet Git.RevSpec -> ExceptT Error io [Deployment]
+    snapshotDeployment :: MonadIO io => Git.URLWithCredentials -> DeployRevision -> HashSet Git.RevSpec -> ExceptT Error io [Deployment]
     snapshotDeployment url deployRevision revSpecs = do
       latest <- latestRevision url revSpecs
       pure $ case latest of
@@ -391,7 +398,7 @@ deployLeadTimes differ envPath startDate endDate = do
       :: MonadIO io
       => Git.URLWithCredentials
       -> [Deployment]
-      -> (Git.Revision, HashSet Git.RevSpec)
+      -> (DeployRevision, HashSet Git.RevSpec)
       -> ExceptT Error io [Deployment]
     thing url history (deployRevision, imageRevisions) =
       case history of
@@ -403,7 +410,7 @@ deployLeadTimes differ envPath startDate endDate = do
             Nothing -> pure history
             Just latest' -> do
               deployedRevisions <- withExceptT GitError $ Git.getLog imageRepoPath (Git.getRevSpec sourceRevision) (Git.getRevSpec latest') Nothing
-              pure $ [Deployment deployRevision deployed | deployed <- reverse deployedRevisions] <> history
+              pure $ [Deployment deployed deployRevision | deployed <- reverse deployedRevisions] <> history
 
 
 loadEnvFromGit :: MonadIO io => FilePath -> FilePath -> Git.Hash -> FilePath -> ExceptT Git.GitError io Kube.Env
