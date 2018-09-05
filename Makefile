@@ -30,7 +30,7 @@ OUTPUT_IMAGE_NAME := quay.io/weaveworks/compare-revisions
 DEV_PORT := 8000
 
 # Directory to use for the development server workspace.
-DEV_WORKSPACE := .workspace
+DEV_WORKSPACE := $(PWD)/.workspace
 
 # Location of the development server's config file.
 DEV_CONFIG_FILE := $(DEV_WORKSPACE)/config.yaml
