@@ -35,13 +35,15 @@ module CompareRevisions.Git
 import Protolude hiding (hash)
 
 import qualified Control.Logging as Log
+import Control.Monad.Fail (fail)
 import qualified Data.Attoparsec.Text as Atto
 import qualified Data.Attoparsec.Time as Atto
 import qualified Data.ByteString.Char8 as ByteString
 import qualified Data.Char as Char
 import qualified Data.Text as Text
 import qualified Data.Time as Time
-import Data.Aeson (FromJSON(..), ToJSON(..), ToJSONKey(..), withText, object, (.=))
+import Data.Aeson (FromJSON(..), ToJSON(..), ToJSONKey(..), ToJSONKeyFunction(..), withText, object, (.=))
+import qualified Data.Aeson.Encoding as Aeson
 import qualified Network.URI
 import System.Directory (removeDirectoryRecursive)
 import System.FilePath ((</>), makeRelative, takeDirectory)
@@ -76,6 +78,11 @@ toText (SCP scp) = formatSCP scp
 
 instance ToJSON URL where
   toJSON = toJSON . toText
+
+instance ToJSONKey URL where
+  toJSONKey = ToJSONKeyText f g
+    where f = toText
+          g = Aeson.text . toText
 
 instance FromJSON URL where
   parseJSON = withText "URI must be text" $ \text ->
@@ -126,9 +133,13 @@ data URLWithCredentials
   deriving (Eq, Ord, Show)
 
 instance ToJSON URLWithCredentials where
-  toJSON = toJSON . toText . toURL
+  toJSON = toJSON . toURL
 
-instance ToJSONKey URLWithCredentials
+instance ToJSONKey URLWithCredentials where
+  toJSONKey = ToJSONKeyText f g
+    where
+      f = toText . toURL
+      g = Aeson.text . toText . toURL
 
 toURL :: URLWithCredentials -> URL
 toURL (CredURI uri) = URI uri
@@ -187,7 +198,15 @@ applyCredentials (SCP scp@(SCP.AuthRemoteFile scpName hostname path)) (Just (SSH
 newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON, ToJSON)
 
 -- | A SHA-1 hash for a Git revision.
-newtype Hash = Hash { unHash :: Text } deriving (Eq, Ord, Show, Generic, FromJSON, ToJSON)
+newtype Hash = Hash { unHash :: Text } deriving (Eq, Ord, Show)
+
+instance ToJSON Hash where
+  toJSON = toJSON . unHash
+
+instance FromJSON Hash where
+  parseJSON = withText "Hash" $ \text -> case Atto.parseOnly fullHashParser text of
+                                           Left err -> fail err
+                                           Right hash -> pure hash
 
 -- | Parse a full SHA1 hash.
 fullHashParser :: Atto.Parser Hash
