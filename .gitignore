@@ -3,3 +3,4 @@
 .output
 .uptodate
 /.dir-locals.el
+/.workspace

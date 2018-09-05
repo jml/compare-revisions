@@ -1,4 +1,4 @@
-.PHONY: all build test clean build-image publish-image
+.PHONY: all build test clean build-image publish-image dev-server
 .DEFAULT_GOAL := all
 
 # Boiler plate for bulding Docker containers.
@@ -25,6 +25,15 @@ STACK_OUTPUT_IMAGE_NAME := quay.io/weaveworks/compare-revisions-compare-revision
 # The image name we actually want to generate. This is what we push to an
 # image registry.
 OUTPUT_IMAGE_NAME := quay.io/weaveworks/compare-revisions
+
+# Port to run the development server on.
+DEV_PORT := 8000
+
+# Directory to use for the development server workspace.
+DEV_WORKSPACE := .workspace
+
+# Location of the development server's config file.
+DEV_CONFIG_FILE := $(DEV_WORKSPACE)/config.yaml
 
 UPTODATE_FILES := $(UPTODATE) $(BASE_IMAGE_DIR)/$(UPTODATE)
 IMAGE_NAMES := $(BASE_IMAGE_NAME) $(STACK_OUTPUT_IMAGE_NAME) $(OUTPUT_IMAGE_NAME)
@@ -55,6 +64,18 @@ build-image: $(UPTODATE)
 
 publish-image: build-image
 	$(SUDO) docker push $(OUTPUT_IMAGE_NAME):$(IMAGE_TAG)
+
+# Run a server on localhost that uses a workspace directory that's within this
+# repository and ignored by Git. Expects a config file to have been provided.
+dev-server: build
+	stack $(STACK_FLAGS) exec compare-revisions -- \
+      --port=$(DEV_PORT) --external-url=http://localhost:$(DEV_PORT) \
+      --access-logs=dev \
+      --log-level=debug \
+      --debug-exceptions \
+      --static-dir=$(BASE_IMAGE_DIR)/bootstrap/ \
+      --config-file=$(DEV_CONFIG_FILE) \
+      --git-repo-dir=$(DEV_WORKSPACE)
 
 clean:
 	$(SUDO) docker rmi $(IMAGE_NAMES) >/dev/null 2>&1 || true
